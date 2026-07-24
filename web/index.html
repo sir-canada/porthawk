@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>porthawk</title>
+<style>
+:root{
+  --bg:#0b0e14; --bg2:#0f131c; --bg3:#131826;
+  --line:#1e2430; --line2:#2a3242;
+  --fg:#c8d3e0; --dim:#5c6a80; --dimmer:#3a4356;
+  --acc:#5ccfe6; --accdim:rgba(92,207,230,.13);
+  --ok:#87d96c; --bad:#f07178; --warn:#ffd580;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  background:var(--bg); color:var(--fg);
+  font:12.5px/1.45 ui-monospace,'JetBrains Mono','Cascadia Mono',monospace;
+  display:flex; flex-direction:column; overflow:hidden;
+}
+/* ---- top bar ---- */
+#bar{
+  display:flex; align-items:center; gap:14px; padding:7px 12px;
+  border-bottom:1px solid var(--line); background:var(--bg2);
+  flex-wrap:wrap; user-select:none;
+}
+#logo{color:var(--acc); font-weight:600; letter-spacing:.5px}
+#logo::before{content:"◆ "; font-size:10px}
+.stat{color:var(--dim); white-space:nowrap}
+.stat b{color:var(--fg); font-weight:500}
+.stat .dn{color:var(--ok)} .stat .up{color:var(--bad)}
+#filter{
+  background:var(--bg); border:1px solid var(--line2); color:var(--fg);
+  padding:3px 9px; border-radius:3px; width:220px; outline:none;
+  font:inherit; transition:border-color .12s, box-shadow .12s;
+}
+#filter:focus{border-color:var(--acc); box-shadow:0 0 0 1px var(--accdim)}
+#filter::placeholder{color:var(--dimmer)}
+#ratebox{color:var(--dim); display:flex; align-items:center; gap:5px; white-space:nowrap}
+#rate{
+  background:var(--bg); border:1px solid var(--line2); color:var(--fg);
+  width:52px; padding:2px 5px; border-radius:3px; font:inherit; outline:none;
+  text-align:right;
+}
+#rate:focus{border-color:var(--acc); box-shadow:0 0 0 1px var(--accdim)}
+.tabs{display:flex; border:1px solid var(--line2); border-radius:3px; overflow:hidden}
+.tabs button{
+  background:none; border:0; color:var(--dim); padding:3px 11px;
+  font:inherit; cursor:pointer; transition:all .12s;
+  border-right:1px solid var(--line2);
+}
+.tabs button:last-child{border-right:0}
+.tabs button.on{background:var(--accdim); color:var(--acc)}
+.tabs button:hover:not(.on){color:var(--fg)}
+.tgl{
+  background:none; border:1px solid var(--line2); color:var(--dim);
+  padding:3px 10px; border-radius:3px; font:inherit; cursor:pointer;
+  transition:all .12s; white-space:nowrap;
+}
+.tgl:hover{color:var(--fg); border-color:var(--dim)}
+.tgl.on{color:var(--acc); border-color:var(--acc); background:var(--accdim)}
+#spacer{flex:1}
+#wsdot{width:7px;height:7px;border-radius:50%;background:var(--bad);transition:background .3s}
+#wsdot.on{background:var(--ok); box-shadow:0 0 5px var(--ok)}
+/* ---- table ---- */
+#wrap{flex:1; overflow:auto}
+table{border-collapse:collapse; width:100%; white-space:nowrap}
+thead th{
+  position:sticky; top:0; z-index:2; background:var(--bg2);
+  border-bottom:1px solid var(--line2); padding:5px 10px;
+  text-align:left; color:var(--dim); font-weight:500; cursor:pointer;
+  user-select:none; transition:color .12s;
+}
+thead th:hover{color:var(--fg)}
+thead th.num{text-align:right}
+thead th .arr{color:var(--acc); font-size:9px; margin-left:3px}
+tbody td{padding:2px 10px; border-bottom:1px solid var(--line)}
+tbody td.num{text-align:right; font-variant-numeric:tabular-nums}
+/* flash = static class + fade-out transition, never CSS animation:
+   animations replay every time sorting re-inserts the row */
+tbody tr{transition:background .7s}
+tbody tr:hover{background:var(--bg3); box-shadow:inset 2px 0 0 var(--acc); transition:background .12s}
+tr.new{background:rgba(135,217,108,.26); transition:none}
+tr.dying{background:rgba(240,113,120,.26); transition:none}
+tr.dead{color:var(--dimmer)}
+tr.grp{cursor:pointer; user-select:none}
+tr.grp td{
+  background:var(--bg3); border-bottom:1px solid var(--line2);
+  border-top:1px solid var(--line2); transition:background .7s;
+}
+tr.grp:hover td{background:#182031; transition:background .12s}
+tr.grp.new td{background:rgba(135,217,108,.22); transition:none}
+tr.grp td.comm{color:var(--acc)}
+tr.grp .garr{color:var(--dim); font-size:10px; text-align:center}
+tr.grp td.gconns{color:var(--dim)}
+td.flag{font-size:14px; padding-right:2px}
+td.comm{color:var(--fg); max-width:180px; overflow:hidden; text-overflow:ellipsis}
+td.pid{color:var(--dim); cursor:pointer; position:relative}
+td.pid:hover{color:var(--acc)}
+td.pid.copied{color:var(--ok)}
+td.state.ESTABLISHED{color:var(--ok)}
+td.state.LISTEN{color:var(--acc)}
+td.state.UNCONN{color:var(--warn)}
+td.state.TIME_WAIT,td.state.CLOSE_WAIT,td.state.FIN_WAIT1,td.state.FIN_WAIT2,
+td.state.CLOSING,td.state.LAST_ACK,td.state.CLOSE{color:var(--dim)}
+td.state.DISCONNECTED{color:var(--bad); font-weight:600}
+/* ghost: a connection that just vanished, held ~30s so you can see it die */
+tr.ghost td{opacity:.5; font-style:italic; box-shadow:inset 2px 0 0 var(--bad)}
+tr.ghost:hover td{opacity:.75}
+td.host,td.user{color:var(--dim); max-width:230px; overflow:hidden; text-overflow:ellipsis}
+td.local,td.remote{overflow:hidden; text-overflow:ellipsis; max-width:280px}
+.copyable{cursor:pointer}
+tbody td.copyable:hover{color:var(--acc)}
+td.copyable.copied{color:var(--ok)}
+td.rate{position:relative}
+td.rate .bar{
+  position:absolute; right:0; top:15%; bottom:15%; z-index:0;
+  background:var(--accdim); pointer-events:none; transition:width .4s;
+}
+td.rate span{position:relative; z-index:1}
+td.kill{width:26px; padding:2px 4px}
+.kbtn{
+  background:none; border:0; color:var(--bad); cursor:pointer; font:inherit;
+  opacity:0; padding:0 4px; border-radius:2px; transition:opacity .12s;
+}
+tr:hover .kbtn{opacity:.7}
+.kbtn:hover{opacity:1 !important; background:rgba(240,113,120,.15)}
+.kbtn.confirm{opacity:1; color:var(--bg); background:var(--bad)}
+#empty{padding:30px; text-align:center; color:var(--dimmer)}
+::-webkit-scrollbar{width:8px;height:8px}
+::-webkit-scrollbar-thumb{background:var(--line2); border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</head>
+<body>
+<div id="bar">
+  <span id="logo">porthawk</span>
+  <span class="stat">↓ <b class="dn" id="tDnR">0</b> <b id="tDnT" >—</b></span>
+  <span class="stat">↑ <b class="up" id="tUpR">0</b> <b id="tUpT">—</b></span>
+  <span class="stat"><b id="tCnt">0</b> conns</span>
+  <input id="filter" placeholder="filter: proc, ip, port, cc, user…" spellcheck="false">
+  <div class="tabs" id="tabs">
+    <button data-v="all">All</button>
+    <button data-v="listen">Listening</button>
+    <button data-v="est" class="on">Established</button>
+  </div>
+  <button class="tgl" id="dns" title="reverse DNS lookups">dns</button>
+  <button class="tgl" id="local" title="show local — LAN / loopback (🏠 🔁) connections">local</button>
+  <button class="tgl" id="pause" title="freeze display — Space (data keeps collecting)">pause</button>
+  <label class="stat" id="ratebox" title="display refresh interval (seconds)">every
+    <input id="rate" type="number" min="0.25" step="0.25" value="2"> s</label>
+  <span id="spacer"></span>
+  <span class="stat" id="clock"></span>
+  <div id="wsdot" title="websocket"></div>
+</div>
+<div id="wrap">
+  <table>
+    <thead><tr id="hdr">
+      <th data-k="comm">Process</th>
+      <th data-k="pid" class="num">PID</th>
+      <th data-k="user">User</th>
+      <th data-k="proto">Proto</th>
+      <th data-k="state">State</th>
+      <th data-k="local">Local</th>
+      <th data-k="remote">Remote</th>
+      <th data-k="downRate" class="num">↓ KB/s</th>
+      <th data-k="upRate"   class="num">↑ KB/s</th>
+      <th data-k="down"     class="num">↓ Total</th>
+      <th data-k="up"       class="num">↑ Total</th>
+      <th></th>
+    </tr></thead>
+    <tbody id="tb"></tbody>
+  </table>
+  <div id="empty" hidden>no connections match</div>
+</div>
+<script>
+'use strict';
+const $=s=>document.querySelector(s);
+const tb=$('#tb');
+let snap=null, paused=false, view='est', filter='', firstSnap=true;
+let showLocal=false;   // hide LAN / loopback by default
+let refreshMs=2000, refreshTimer=0;
+let colsLocked=false, lockScheduled=false;
+let sortK='down', sortDir=-1;   // default: ↓ Total, descending
+const rows=new Map();            // id -> {el, tds, data, deadAt}
+const expanded=new Set();        // group keys currently expanded
+const ghdrs=new Map();           // group key -> {el, arrow, name, sub}
+let killStage=new Map();         // pid -> 'term'|'kill' sent
+
+// ---- formatting ----
+const fmtRate=k=> k>=1000?(k/1024).toFixed(1)+'M' : k>=100?k.toFixed(0) : k>=10?k.toFixed(1):k.toFixed(2);
+const fmtTot=k=>{
+  if(k<=0)return'';
+  if(k>=1048576)return (k/1048576).toFixed(2)+' GB';
+  if(k>=1024)return (k/1024).toFixed(1)+' MB';
+  return k.toFixed(0)+' KB';
+};
+const barW=k=> k<=0?0 : Math.min(100, Math.log10(1+k)/4*100); // full at ~10MB/s
+const addr=(a,p)=> (a.includes(':')?'['+a+']':a)+':'+p;
+
+// ---- websocket ----
+function connect(){
+  const ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host+'/ws');
+  ws.onopen =()=>$('#wsdot').classList.add('on');
+  ws.onclose=()=>{$('#wsdot').classList.remove('on'); setTimeout(connect,1500);};
+  ws.onmessage=e=>{
+    snap=JSON.parse(e.data);
+    $('#dns').classList.toggle('on', snap.dns);
+    // snapshots arrive ~1/s; the refresh timer drives the redraw so the
+    // display updates at the user's chosen interval. Paint the very first
+    // one immediately so the table isn't blank until the first tick.
+    if(firstSnap && !paused) render();
+  };
+}
+connect();
+
+// ---- display refresh rate (decoupled from the data stream) ----
+function applyRate(sec){
+  sec=Math.max(0.25, +sec||2);
+  refreshMs=sec*1000;
+  clearInterval(refreshTimer);
+  refreshTimer=setInterval(()=>{ if(!paused) render(); }, refreshMs);
+  localStorage.setItem('porthawk.refresh', sec);
+}
+
+// ---- row model ----
+// Remote cell: when DNS is on and the host resolved, show host:port in
+// place of the raw IP; otherwise the IP. host kept separately for filter.
+function remoteDisp(c){
+  const hasPeer=(c.rp!==0||(c.ra!=='0.0.0.0'&&c.ra!=='::'&&c.ra!=='invalid IP'));
+  if(!hasPeer)return'';
+  if(snap&&snap.dns&&c.host)return c.host+':'+c.rp;
+  return addr(c.ra,c.rp);
+}
+function rowVals(c){
+  return {
+    cc:c.cc||'', comm:c.comm||'—', pid:c.pid<0?'':c.pid, user:c.user,
+    proto:c.proto, state:c.state,
+    local:addr(c.la,c.lp),
+    remote:remoteDisp(c),
+    host:c.host||'',
+    // per-connection TCP counters; UDP rows have none (group header
+    // carries the per-process numbers, which include UDP)
+    downRate:c.downRate||0, upRate:c.upRate||0,
+    down:c.down||0, up:c.up||0,
+  };
+}
+const COLS=['comm','pid','user','proto','state','local','remote','downRate','upRate','down','up'];
+
+// One-shot flash: add class now, remove after the hold; the CSS
+// transition then fades it out. Timer-driven, so DOM re-insertion
+// (sort reorder) can never replay it.
+function flash(el){
+  el.classList.add('new');
+  setTimeout(()=>el.classList.remove('new'),1500);
+}
+
+function makeRow(c){
+  const tr=document.createElement('tr');
+  if(!firstSnap && c.state!=='DISCONNECTED')flash(tr); // new conns only; never green-flash a ghost
+  const tds={};
+  for(const k of COLS){
+    const td=document.createElement('td');
+    if(k==='comm')td.className='comm';
+    else if(k==='pid'){td.className='pid num';td.title='click: copy PID';
+      td.onclick=()=>{navigator.clipboard.writeText(String(td.textContent));
+        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};}
+    else if(k==='state')td.className='state';
+    else if(k==='user')td.className='user';
+    else if(k==='local'||k==='remote'){td.className=k+' copyable';td.title='click: copy IP';
+      td.onclick=()=>{const ip=td.dataset.ip; if(!ip)return;
+        navigator.clipboard.writeText(ip);
+        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};}
+    else if(k==='downRate'||k==='upRate'){td.className='rate num';
+      const b=document.createElement('div');b.className='bar';td.appendChild(b);
+      const s=document.createElement('span');td.appendChild(s);}
+    else if(k==='down'||k==='up')td.className='num';
+    tds[k]=td; tr.appendChild(td);
+  }
+  const kc=document.createElement('td'); kc.className='kill';
+  tr.appendChild(kc); tds._kill=kc;
+  return {el:tr, tds, data:null, deadAt:0};
+}
+
+function patchRow(r,c){
+  const v=rowVals(c);
+  const t=r.tds;
+  setTxt(t.comm,v.comm); setTxt(t.pid,String(v.pid)); setTxt(t.user,v.user);
+  setTxt(t.proto,v.proto);
+  if(t.state.textContent!==v.state){t.state.textContent=v.state;t.state.className='state '+v.state;}
+  r.el.classList.toggle('ghost',c.state==='DISCONNECTED');
+  setTxt(t.local,v.local);
+  // flag (geo of the remote peer) sits next to the remote address
+  setTxt(t.remote, v.remote?((c.flag?c.flag+' ':'')+v.remote):'');
+  // raw IPs stashed for click-to-copy (always the IP, never the hostname)
+  t.local.dataset.ip=c.la||'';
+  t.remote.dataset.ip=(c.ra&&c.ra!=='0.0.0.0'&&c.ra!=='::'&&c.ra!=='invalid IP')?c.ra:'';
+  t.remote.title=c.cc?('click: copy IP · '+c.cc):'click: copy IP';
+  rate(t.downRate,v.downRate); rate(t.upRate,v.upRate);
+  setTxt(t.down,fmtTot(v.down)); setTxt(t.up,fmtTot(v.up));
+  killBtn(r,c);
+  r.data={c,v};
+}
+function setTxt(td,s){ if(td.textContent!==s)td.textContent=s; }
+function rate(td,k){
+  const s=td.lastChild, b=td.firstChild;
+  const txt=k>0?fmtRate(k):'';
+  if(s.textContent!==txt)s.textContent=txt;
+  b.style.width=barW(k)+'%';
+}
+function killBtn(r,c){
+  const kc=r.tds._kill;
+  const mine=snap && c.uid===snap.me && c.pid>1 && c.state!=='DISCONNECTED';
+  if(!mine){ if(kc.firstChild)kc.textContent=''; return; }
+  let b=kc.firstChild;
+  if(!b){
+    b=document.createElement('button'); b.className='kbtn'; b.textContent='✕';
+    b.title='kill process';
+    b.onclick=()=>doKill(b);
+    kc.appendChild(b);
+  }
+  b.dataset.pid=c.pid;
+}
+function doKill(b){
+  const pid=+b.dataset.pid;
+  if(!b.classList.contains('confirm')){
+    b.classList.add('confirm'); b.textContent='sure?';
+    setTimeout(()=>{b.classList.remove('confirm');
+      b.textContent=killStage.get(pid)==='term'?'9!':'✕';},2200);
+    return;
+  }
+  const sig=killStage.get(pid)==='term'?'kill':'term';
+  fetch('/api/kill',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({pid,sig})})
+    .then(res=>{ if(res.ok){killStage.set(pid,sig);} });
+  b.classList.remove('confirm');
+  b.textContent = sig==='term' ? '9!' : '✕';   // escalation available
+  b.title = sig==='term' ? 'still alive? SIGKILL' : 'kill process';
+}
+
+// ---- render ----
+function render(){
+  if(!snap)return;
+  const now=Date.now();
+  // totals
+  $('#tDnR').textContent=fmtRate(snap.totals.downRate)+' KB/s';
+  $('#tUpR').textContent=fmtRate(snap.totals.upRate)+' KB/s';
+  $('#tDnT').textContent=fmtTot(snap.totals.down)||'0 KB';
+  $('#tUpT').textContent=fmtTot(snap.totals.up)||'0 KB';
+  $('#clock').textContent=new Date(snap.t).toLocaleTimeString();
+
+  const live=new Set();
+  for(const c of snap.conns){
+    live.add(c.id);
+    let r=rows.get(c.id);
+    if(!r){ r=makeRow(c); rows.set(c.id,r); }
+    if(r.deadAt){ r.deadAt=0; r.el.classList.remove('dead','dying'); }
+    patchRow(r,c);
+  }
+  // mark dead, purge after 3s
+  for(const [id,r] of rows){
+    if(live.has(id))continue;
+    if(!r.deadAt){
+      r.deadAt=now;
+      r.el.classList.add('dead','dying'); // red pulse once, then grey linger
+      setTimeout(()=>r.el.classList.remove('dying'),700);
+    }
+    else if(now-r.deadAt>3000){ r.el.remove(); rows.delete(id); }
+  }
+
+  // filter + view
+  const f=filter.toLowerCase();
+  const vis=[];
+  for(const r of rows.values()){
+    const {c,v}=r.data;
+    let ok=true;
+    if(!showLocal && (c.flag==='🏠'||c.flag==='🔁')) ok=false;   // LAN / loopback
+    if(ok && view==='listen') ok = v.state==='LISTEN'||v.state==='UNCONN';
+    else if(ok && view==='est') ok = v.state==='ESTABLISHED'||v.state==='DISCONNECTED';
+    if(ok&&f) ok=(v.comm+' '+v.pid+' '+v.user+' '+v.local+' '+v.remote+' '
+                  +v.host+' '+v.cc+' '+v.proto+' '+v.state).toLowerCase().includes(f);
+    if(ok)vis.push(r);
+  }
+  $('#tCnt').textContent=vis.length;
+  $('#empty').hidden=vis.length>0;
+
+  const NUMS=['downRate','upRate','down','up'];
+  const numeric=sortK==='pid'||NUMS.includes(sortK);
+  const rcmp=(a,b)=>{
+    let x=a.data.v[sortK], y=b.data.v[sortK];
+    if(numeric){x=+x||0;y=+y||0;}
+    return sortDir*cmp(x,y) || cmp(a.data.c.id,b.data.c.id);
+  };
+
+  // listening (proto,port) pairs -> classify ESTAB rows incoming/outgoing
+  const listenSet=new Set();
+  for(const r of vis){
+    const v=r.data.v;
+    if(v.state==='LISTEN'||v.state==='UNCONN')
+      listenSet.add(r.data.c.proto.slice(0,3)+r.data.c.lp);
+  }
+
+  // bucket by PID
+  const groups=new Map();
+  for(const r of vis){
+    const key=r.data.c.pid+'|'+r.data.v.comm;
+    let g=groups.get(key);
+    if(!g){g={key,pid:r.data.c.pid,comm:r.data.v.comm,user:r.data.v.user,
+             uid:r.data.c.uid,rows:[],out:0,inn:0,lis:0,protos:new Set()};
+      groups.set(key,g);}
+    g.rows.push(r);
+    g.protos.add(r.data.c.proto.slice(0,3));
+    const v=r.data.v;
+    if(v.state==='LISTEN'||v.state==='UNCONN') g.lis++;
+    else if(listenSet.has(r.data.c.proto.slice(0,3)+r.data.c.lp)) g.inn++;
+    else g.out++;
+  }
+  const glist=[...groups.values()];
+  for(const g of glist){
+    // header numbers: per-process (nethogs, includes UDP);
+    // fall back to sum of member connections
+    const ps=snap.procs[g.pid];
+    g.agg={};
+    for(const k of NUMS)
+      g.agg[k]=ps?ps[k]:g.rows.reduce((s,r)=>s+(+r.data.v[k]||0),0);
+    g.rows.sort(rcmp);
+  }
+  glist.sort((a,b)=>{
+    let r;
+    if(NUMS.includes(sortK)) r=sortDir*cmp(a.agg[sortK],b.agg[sortK]);
+    else if(sortK==='pid') r=sortDir*cmp(a.pid,b.pid);
+    else if(sortK==='user') r=sortDir*cmp(a.user,b.user);
+    else r=cmp(a.comm.toLowerCase(),b.comm.toLowerCase());
+    return r||cmp(a.key,b.key);
+  });
+  const seq=[], liveKeys=new Set();
+  for(const g of glist){
+    if(g.rows.length===1){ seq.push(g.rows[0].el); continue; } // lone conn: no group header
+    liveKeys.add(g.key);
+    const open=expanded.has(g.key);
+    seq.push(groupHeader(g,open));
+    if(open){ for(const r of g.rows)seq.push(r.el); }
+    else{
+      // collapsed: consume members' 'new' marks, flash the header once
+      let gained=false;
+      for(const r of g.rows)
+        if(r.el.classList.contains('new')){r.el.classList.remove('new');gained=true;}
+      if(gained)flash(ghdrs.get(g.key).el);
+    }
+  }
+  for(const [k,h] of ghdrs)if(!liveKeys.has(k)){h.el.remove();ghdrs.delete(k);}
+  applySeq(seq);
+  // freeze column widths once, after the session settles (DNS resolved),
+  // so expand/collapse no longer reflows the table. Reload re-measures.
+  if(!colsLocked && !lockScheduled && vis.length){ lockScheduled=true; setTimeout(lockColumns,2500); }
+  firstSnap=false;
+}
+const cmp=(a,b)=>a<b?-1:a>b?1:0;
+
+function lockColumns(){
+  if(colsLocked)return;
+  const ths=[...document.querySelectorAll('#hdr th')];
+  const table=document.querySelector('table');
+  if(!ths.length||!table)return;
+  const cg=document.createElement('colgroup');
+  for(const th of ths){
+    const col=document.createElement('col');
+    col.style.width=Math.ceil(th.getBoundingClientRect().width)+'px';
+    cg.appendChild(col);
+  }
+  table.insertBefore(cg,table.firstChild);
+  table.style.tableLayout='fixed';
+  colsLocked=true;
+}
+
+// Cached header rows with the exact same column grid as connection
+// rows — only Local/Remote/Host collapse into one summary cell.
+function makeRateTd(){
+  const td=document.createElement('td'); td.className='rate num';
+  const b=document.createElement('div'); b.className='bar'; td.appendChild(b);
+  const s=document.createElement('span'); td.appendChild(s);
+  return td;
+}
+function groupHeader(g,open){
+  let h=ghdrs.get(g.key);
+  if(!h){
+    const tr=document.createElement('tr'); tr.className='grp';
+    const tds={};
+    const mk=(cls,span)=>{const td=document.createElement('td');
+      if(cls)td.className=cls; if(span)td.colSpan=span;
+      tr.appendChild(td); return td;};
+    tds.comm =mk('comm');
+    tds.pid  =mk('pid num');
+    tds.pid.title='click: copy PID';
+    tds.pid.onclick=e=>{e.stopPropagation();
+      navigator.clipboard.writeText(tds.pid.textContent);
+      tds.pid.classList.add('copied');
+      setTimeout(()=>tds.pid.classList.remove('copied'),600);};
+    tds.user =mk('user');
+    tds.proto=mk('');
+    tds.state=mk('state');
+    tds.conns=mk('gconns',2);       // spans Local + Remote
+    tds.dr=makeRateTd(); tr.appendChild(tds.dr);
+    tds.ur=makeRateTd(); tr.appendChild(tds.ur);
+    tds.down =mk('num');
+    tds.up   =mk('num');
+    tds.kill =mk('kill');
+    const key=g.key;
+    tr.onclick=()=>{expanded.has(key)?expanded.delete(key):expanded.add(key);render();};
+    h={el:tr,tds}; ghdrs.set(key,h);
+  }
+  const t=h.tds;
+  setTxt(t.comm,(open?'▾ ':'▸ ')+g.comm);
+  setTxt(t.pid,g.pid<0?'?':String(g.pid));
+  setTxt(t.user,g.user);
+  setTxt(t.proto,[...g.protos].sort().join(' '));
+  const parts=[];
+  if(g.out)parts.push(g.out+' outgoing');
+  if(g.inn)parts.push(g.inn+' incoming');
+  if(g.lis)parts.push(g.lis+' listening');
+  setTxt(t.conns,parts.join(' · ')||'—');
+  rate(t.dr,g.agg.downRate); rate(t.ur,g.agg.upRate);
+  setTxt(t.down,fmtTot(g.agg.down)); setTxt(t.up,fmtTot(g.agg.up));
+  // kill button: whole process, own UID only
+  const mine=snap && g.uid===snap.me && g.pid>1;
+  if(!mine){ t.kill.textContent=''; }
+  else{
+    let b=t.kill.firstChild;
+    if(!b){
+      b=document.createElement('button'); b.className='kbtn'; b.textContent='✕';
+      b.title='kill process';
+      b.onclick=e=>{e.stopPropagation();doKill(b);};
+      t.kill.appendChild(b);
+    }
+    b.dataset.pid=g.pid;
+  }
+  return h.el;
+}
+
+// Reconcile tbody to the desired sequence with minimal DOM movement:
+// re-appending unchanged rows restarts animations and forces layout.
+function applySeq(seq){
+  const want=new Set(seq);
+  for(const el of [...tb.children])if(!want.has(el))el.remove();
+  let same=tb.children.length===seq.length;
+  if(same)for(let i=0;i<seq.length;i++)if(tb.children[i]!==seq[i]){same=false;break;}
+  if(!same){
+    const frag=document.createDocumentFragment();
+    for(const el of seq)frag.appendChild(el);
+    tb.appendChild(frag);
+  }
+}
+
+// ---- controls ----
+$('#filter').oninput=e=>{filter=e.target.value;render();};
+$('#tabs').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  view=b.dataset.v;
+  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  render();
+};
+$('#dns').onclick=e=>{
+  const want=!e.target.classList.contains('on');
+  fetch('/api/dns',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({enabled:want})})
+    .then(res=>{if(res.ok)e.target.classList.toggle('on',want);});
+};
+$('#pause').onclick=e=>{
+  paused=!paused;e.target.classList.toggle('on',paused);
+  e.target.textContent=paused?'resume':'pause';
+  if(!paused)render();
+};
+$('#local').onclick=e=>{
+  showLocal=!showLocal;
+  e.target.classList.toggle('on',showLocal);
+  localStorage.setItem('porthawk.local',showLocal?'1':'0');
+  render();
+};
+$('#hdr').onclick=e=>{
+  const th=e.target.closest('th'); if(!th||!th.dataset.k)return;
+  const k=th.dataset.k;
+  if(sortK===k)sortDir=-sortDir; else {sortK=k;sortDir=['downRate','upRate','down','up'].includes(k)?-1:1;}
+  document.querySelectorAll('#hdr th .arr').forEach(a=>a.remove());
+  const a=document.createElement('span');a.className='arr';a.textContent=sortDir>0?'▲':'▼';
+  th.appendChild(a);
+  render();
+};
+
+// local toggle (persisted; default hidden)
+showLocal=localStorage.getItem('porthawk.local')==='1';
+$('#local').classList.toggle('on',showLocal);
+
+// refresh-rate input (persisted)
+const savedRate=+localStorage.getItem('porthawk.refresh')||2;
+$('#rate').value=savedRate;
+$('#rate').onchange=e=>applyRate(e.target.value);
+applyRate(savedRate);
+
+// Space toggles pause (unless typing in a field)
+document.addEventListener('keydown',e=>{
+  if(e.code!=='Space')return;
+  const t=(document.activeElement||{}).tagName;
+  if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return;
+  e.preventDefault();
+  $('#pause').click();
+});
+
+// show the default sort arrow on ↓ Total at load
+(()=>{
+  const th=document.querySelector('#hdr th[data-k="'+sortK+'"]');
+  if(!th)return;
+  const a=document.createElement('span'); a.className='arr';
+  a.textContent=sortDir>0?'▲':'▼'; th.appendChild(a);
+})();
+</script>
+</body>
+</html>

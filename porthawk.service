@@ -1,0 +1,34 @@
+# porthawk — per-user service (`systemctl --user`). No root at runtime.
+#
+# WHY NO SANDBOXING DIRECTIVES:
+# porthawk and its nethogs child rely on setcap file capabilities
+# (cap_net_admin,cap_net_raw for pcap; cap_dac_read_search,cap_sys_ptrace
+# to map every user's sockets via /proc/*/fd). In an UNPRIVILEGED
+# --user service, systemd implements ProtectSystem=, PrivateTmp=,
+# CapabilityBoundingSet=, MemoryDenyWriteExecute=, Restrict*=, etc. by
+# entering a user+mount namespace and/or forcing NoNewPrivileges — every
+# one of which INVALIDATES the binary's file caps. Result: nethogs prints
+# "you need to enable capabilities" and traffic capture silently dies.
+# Verified: adding ANY such directive here breaks it, even with an
+# explicit NoNewPrivileges=no. So this unit stays bare on purpose. If you
+# want systemd sandbox hardening, run it as a SYSTEM service instead with
+# AmbientCapabilities= (ambient caps survive NoNewPrivileges; file caps
+# do not) — see git history for that variant.
+#
+# Security without the sandbox: binds 127.0.0.1 only, every route needs
+# the 256-bit token, WebSocket is same-origin, never runs as root, holds
+# no CAP_KILL (kernel refuses cross-user signals).
+#
+# Install (one sudo, for setcap only):  make install
+
+[Unit]
+Description=porthawk - per-process connection monitor (web UI on 127.0.0.1:7413)
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/porthawk
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

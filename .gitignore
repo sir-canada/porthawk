@@ -1,0 +1,14 @@
+# compiled binary (built by `make build`; carries file caps on the inode)
+/porthawk
+
+# go
+*.test
+*.out
+/dist/
+
+# editor / os
+*.swp
+*~
+.DS_Store
+.idea/
+.vscode/
