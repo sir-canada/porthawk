@@ -6,9 +6,10 @@
 <title>porthawk</title>
 <style>
 :root{
-  --bg:#0b0e14; --bg2:#0f131c; --bg3:#131826;
-  --line:#1e2430; --line2:#2a3242;
-  --fg:#c8d3e0; --dim:#5c6a80; --dimmer:#3a4356;
+  /* black / night theme: neutral greys (R=G=B, no blue hue); cyan accent kept */
+  --bg:#000000; --bg2:#0d0d0d; --bg3:#161616;
+  --line:#232323; --line2:#343434;
+  --fg:#d4d4d4; --dim:#7d7d7d; --dimmer:#4a4a4a;
   --acc:#5ccfe6; --accdim:rgba(92,207,230,.13);
   --ok:#87d96c; --bad:#f07178; --warn:#ffd580;
 }
@@ -89,7 +90,7 @@ tr.grp td{
   background:var(--bg3); border-bottom:1px solid var(--line2);
   border-top:1px solid var(--line2); transition:background .7s;
 }
-tr.grp:hover td{background:#182031; transition:background .12s}
+tr.grp:hover td{background:#1e1e1e; transition:background .12s}
 tr.grp.new td{background:rgba(135,217,108,.22); transition:none}
 tr.grp td.comm{color:var(--acc)}
 tr.grp .garr{color:var(--dim); font-size:10px; text-align:center}
