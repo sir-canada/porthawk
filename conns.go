@@ -24,11 +24,32 @@ type Conn struct {
 	RPort uint16 `json:"rp"`
 	PID   int    `json:"pid"`
 	Comm  string `json:"comm"`
+	App   string `json:"app"` // recognizable app/instance name, "" = use comm
 	UID   uint32 `json:"uid"`
 	User  string `json:"user"`
 	CC    string `json:"cc"`   // ISO country code, "" = n/a
 	Flag  string `json:"flag"` // emoji
-	Host  string `json:"host"` // reverse DNS, "" = unresolved
+	Host  string `json:"host"` // reverse DNS of the peer, "" = unresolved
+	// Local-side naming, same sources as the remote side: the local
+	// address is an address like any other, and on a multi-homed or
+	// publicly-addressed host it is worth naming too.
+	LHost  string `json:"lhost,omitempty"`
+	LOwner string `json:"lowner,omitempty"`
+	LAlias string `json:"lalias,omitempty"`
+	// Iface/LIface name the local network adapter the address is assigned
+	// to, e.g. wlan0. Set only for addresses the kernel says are ours, and
+	// preferred over reverse DNS and ownership for those: the hostname is
+	// the same for every interface, the adapter name is not.
+	Iface  string `json:"if,omitempty"`
+	LIface string `json:"lif,omitempty"`
+	// Owner is who the IP range is registered to (RDAP), used when reverse
+	// DNS yields nothing. Alias is the user's own name for this address.
+	// Hide marks a row as matching a user hide rule — the row is still
+	// sent, so the UI can unhide instantly and count what's suppressed.
+	Owner string `json:"owner,omitempty"`
+	Pfx   string `json:"pfx,omitempty"` // owning range, e.g. 160.79.104.0/21
+	Alias string `json:"alias,omitempty"`
+	Hide  bool   `json:"hide,omitempty"`
 	// per-connection traffic (TCP only, from tcp_info; UDP has none)
 	UpKB     float64 `json:"up,omitempty"`
 	DownKB   float64 `json:"down,omitempty"`
@@ -48,6 +69,7 @@ type Scanner struct {
 	mu        sync.Mutex
 	inodePID  map[uint64]int    // socket inode -> pid
 	commCache map[int]string    // pid -> comm
+	appCache  map[int]string    // pid -> app label
 	userCache map[uint32]string // uid -> username
 	lastWalk  time.Time
 }
@@ -56,6 +78,7 @@ func NewScanner() *Scanner {
 	return &Scanner{
 		inodePID:  make(map[uint64]int),
 		commCache: make(map[int]string),
+		appCache:  make(map[int]string),
 		userCache: make(map[uint32]string),
 	}
 }
@@ -63,11 +86,11 @@ func NewScanner() *Scanner {
 // Scan returns the current connection set.
 func (s *Scanner) Scan() []Conn {
 	type raw struct {
-		proto        string
-		local, rem   string
-		state        string
-		uid          uint32
-		inode        uint64
+		proto      string
+		local, rem string
+		state      string
+		uid        uint32
+		inode      uint64
 	}
 	var raws []raw
 	for _, f := range [...]struct{ path, proto string }{
@@ -135,6 +158,7 @@ func (s *Scanner) Scan() []Conn {
 		if pid, ok := s.inodePID[r.inode]; ok && r.inode != 0 {
 			c.PID = pid
 			c.Comm = s.comm(pid)
+			c.App = s.appLocked(pid, c.Comm)
 		}
 		c.CC, c.Flag = geoLookup(ra)
 		c.ID = fmt.Sprintf("%s|%s:%d|%s:%d", c.Proto, c.LAddr, c.LPort, c.RAddr, c.RPort)
@@ -177,9 +201,31 @@ func (s *Scanner) walkProc() {
 	for pid := range s.commCache {
 		if !livePids[pid] {
 			delete(s.commCache, pid)
+			delete(s.appCache, pid)
 		}
 	}
 	s.lastWalk = time.Now()
+}
+
+// appLocked returns the cached app label for pid (caller holds s.mu).
+func (s *Scanner) appLocked(pid int, comm string) string {
+	if a, ok := s.appCache[pid]; ok {
+		return a
+	}
+	a := appIdentity(pid, comm)
+	s.appCache[pid] = a
+	return a
+}
+
+// App returns the app label for pid, resolving comm as needed. Safe for
+// callers outside Scan (takes the lock itself).
+func (s *Scanner) App(pid int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok := s.appCache[pid]; ok {
+		return a
+	}
+	return s.appLocked(pid, s.comm(pid))
 }
 
 func (s *Scanner) comm(pid int) string {

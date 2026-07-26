@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"strconv"
@@ -29,13 +30,12 @@ func handleKill(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	st, err := os.Stat("/proc/" + strconv.Itoa(body.PID))
+	uid, err := procUID(body.PID)
 	if err != nil {
 		http.Error(w, "no such process", http.StatusNotFound)
 		return
 	}
-	sys, ok := st.Sys().(*syscall.Stat_t)
-	if !ok || sys.Uid != uint32(os.Getuid()) {
+	if uid != uint32(os.Getuid()) {
 		http.Error(w, "forbidden: not your process", http.StatusForbidden)
 		return
 	}
@@ -49,4 +49,19 @@ func handleKill(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// procUID reports the owning uid of a live process. Used both to enforce
+// the same-user rule here and, in elevate.go, to confirm a pid still
+// exists before asking for authentication to signal it.
+func procUID(pid int) (uint32, error) {
+	st, err := os.Stat("/proc/" + strconv.Itoa(pid))
+	if err != nil {
+		return 0, err
+	}
+	sys, ok := st.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, errors.New("cannot read process owner")
+	}
+	return sys.Uid, nil
 }

@@ -7,7 +7,7 @@ import (
 
 // ghostTTL is how long a vanished ESTABLISHED connection lingers in the
 // table as a DISCONNECTED "ghost" after the kernel drops its socket.
-const ghostTTL = 30 * time.Second
+const ghostTTL = 45 * time.Second
 
 // Ghosts remembers connections that were ESTABLISHED and then disappeared,
 // re-emitting them as state "DISCONNECTED" for a short window. Tracking

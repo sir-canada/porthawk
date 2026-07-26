@@ -4,6 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>porthawk</title>
+<!-- Favicon: a black rounded plate, a heavy cyan (--acc) monitor/port frame
+     whose lower edge is crenellated (the two teeth read as a socket at 16px,
+     where finer screen detail would just mud), one grey (--fg) scan line
+     running edge to edge through it, and a translucent white magnifying glass
+     over the bottom-right corner. The glass is deliberately *not* opaque: a
+     16% white fill plus a 70% ring lets the cyan frame and the scan line show
+     through, so the lens reads as glass laid on the machine rather than a
+     second solid shape competing with it. Inline as a data URI so the single
+     embedded page stays the whole frontend: no second asset, no second route.
+     Everything is axis-aligned except the handle (short, thick, round-capped),
+     and no stroke is under 1.8 units in a 32 viewBox, so nothing thins out to
+     nothing when the browser scales this to a 16px tab icon.
+     -->
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%23000'/><rect x='5' y='8' width='22' height='16' fill='%235ccfe6'/><path d='M8.5 11.5H23.5V19H21V21.5H18.5V19H17V21.5H15V19H13.5V21.5H11V19H8.5Z' fill='%23000'/><rect x='1.5' y='15.4' width='29' height='1.2' fill='%23d4d4d4' fill-opacity='.45'/><path d='M25.9 25.9L28.7 28.7' stroke='%23fff' stroke-opacity='.7' stroke-width='2.6' stroke-linecap='round'/><circle cx='21.8' cy='21.8' r='5.4' fill='%23fff' fill-opacity='.16' stroke='%23fff' stroke-opacity='.7' stroke-width='2.1'/></svg>">
+<meta name="theme-color" content="#000000">
 <style>
 :root{
   /* black / night theme: neutral greys (R=G=B, no blue hue); cyan accent kept */
@@ -106,11 +121,143 @@ td.state.UNCONN{color:var(--warn)}
 td.state.TIME_WAIT,td.state.CLOSE_WAIT,td.state.FIN_WAIT1,td.state.FIN_WAIT2,
 td.state.CLOSING,td.state.LAST_ACK,td.state.CLOSE{color:var(--dim)}
 td.state.DISCONNECTED{color:var(--bad); font-weight:600}
-/* ghost: a connection that just vanished, held ~30s so you can see it die */
-tr.ghost td{opacity:.5; font-style:italic; box-shadow:inset 2px 0 0 var(--bad)}
+/* ghost: a connection that just vanished, held ~45s so you can see it die */
+/* tint is translucent so the tr-level dying/new flash backgrounds still read
+   through it; alpha is doubled to survive the .5 opacity above */
+tr.ghost td{opacity:.5; font-style:italic; background:rgba(240,113,120,.14)}
+/* marker line brackets the row, not every column boundary */
+tr.ghost td:first-child{box-shadow:inset 2px 0 0 var(--bad)}
+tr.ghost td:last-child{box-shadow:inset -2px 0 0 var(--bad)}
 tr.ghost:hover td{opacity:.75}
 td.host,td.user{color:var(--dim); max-width:230px; overflow:hidden; text-overflow:ellipsis}
 td.local,td.remote{overflow:hidden; text-overflow:ellipsis; max-width:280px}
+/* a name the user chose themselves reads as authoritative; an RDAP range
+   owner is a guess about a whole netblock, so it stays dim and italic */
+td.remote .lbl.alias,td.local.alias{color:var(--warn)}
+td.remote .lbl.owner,td.local.owner{color:var(--dim); font-style:italic}
+/* rows a hide rule matched, shown only when hiding is toggled off */
+tr.hid td{opacity:.45}
+tr.hid:hover td{opacity:.8}
+#hidbox{color:var(--dim); cursor:pointer; white-space:nowrap}
+#hidbox:hover{color:var(--fg)}
+#hidbox.off{color:var(--warn)}
+/* ---- settings panel ---- */
+#gear{
+  background:none; border:1px solid var(--line2); color:var(--dim);
+  padding:3px 8px; border-radius:3px; cursor:pointer; font:inherit; line-height:1;
+}
+#gear:hover{color:var(--fg); border-color:var(--dim)}
+#gear.on{color:var(--acc); border-color:var(--acc); background:var(--accdim)}
+#veil{position:fixed; inset:0; z-index:40; background:rgba(0,0,0,.55)}
+#veil.hidden,#panel.hidden{display:none}
+#panel{
+  position:fixed; z-index:41; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:min(660px,92vw); max-height:82vh; overflow:auto;
+  background:var(--bg2); border:1px solid var(--line2); border-radius:6px;
+  box-shadow:0 18px 50px rgba(0,0,0,.8);
+}
+#panel h2{
+  font:inherit; font-weight:600; color:var(--acc); padding:10px 14px;
+  border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px;
+}
+#panel h2 .x{margin-left:auto; color:var(--dim); cursor:pointer; padding:0 4px}
+#panel h2 .x:hover{color:var(--bad)}
+#panel section{padding:12px 14px; border-bottom:1px solid var(--line)}
+#panel section:last-child{border-bottom:0}
+#panel h3{font:inherit; font-weight:500; color:var(--fg); margin-bottom:3px}
+#panel .hint{color:var(--dimmer); margin-bottom:8px}
+#panel table{width:auto; min-width:100%}
+#panel td{padding:2px 6px 2px 0; border:0; vertical-align:middle}
+#panel input{
+  background:var(--bg); border:1px solid var(--line2); color:var(--fg);
+  padding:3px 7px; border-radius:3px; font:inherit; outline:none; width:100%;
+}
+#panel input:focus{border-color:var(--acc); box-shadow:0 0 0 1px var(--accdim)}
+#panel input.bad{border-color:var(--bad)}
+#panel .mono{color:var(--dim)}
+#panel .del{
+  background:none; border:0; color:var(--dim); cursor:pointer; font:inherit;
+  padding:0 5px; border-radius:2px;
+}
+#panel .del:hover{color:var(--bad); background:rgba(240,113,120,.15)}
+#panel .addbtn{
+  background:none; border:1px solid var(--line2); color:var(--dim);
+  padding:3px 10px; border-radius:3px; cursor:pointer; font:inherit;
+}
+#panel .addbtn:hover{color:var(--acc); border-color:var(--acc)}
+#panel .empty{color:var(--dimmer); padding:2px 0 6px; grid-column:1/-1}
+#panel .path{color:var(--dimmer); word-break:break-all}
+/* One grid for the whole rule list, add row included. Each row used to be
+   its own grid, so the narrow ✕ on saved rules and the wider "add" button
+   sized their third column differently and the fields never lined up.
+   Rows are display:contents, which lifts their cells into this grid. */
+#panel .rules{display:grid; grid-template-columns:1fr 1fr auto; gap:5px 8px; align-items:center}
+#panel .rules.one{grid-template-columns:1fr auto}
+#panel .rules .cols,#aliasList,#hideList,#exclList{display:contents}
+/* ---- panel tabs ---- */
+#panel .ptabs{display:flex; gap:2px; margin:0 0 14px; border-bottom:1px solid var(--line2)}
+#panel .ptabs button{
+  background:none; border:0; border-bottom:2px solid transparent; color:var(--dimmer);
+  font:inherit; padding:5px 11px; cursor:pointer; margin-bottom:-1px;
+}
+#panel .ptabs button:hover{color:var(--fg)}
+#panel .ptabs button.on{color:var(--acc); border-bottom-color:var(--acc)}
+#panel section[data-tab]{display:none}
+#panel section[data-tab].show{display:block}
+/* a parked rule stays legible but reads as inactive */
+#panel .off input{opacity:.45; text-decoration:line-through}
+#panel .rowbtns{display:flex; gap:4px; align-items:center}
+#panel .pwr{
+  background:none; border:1px solid var(--line2); color:var(--dimmer);
+  border-radius:3px; cursor:pointer; font:inherit; line-height:1; padding:3px 6px;
+}
+#panel .pwr:hover{color:var(--fg); border-color:var(--dim)}
+#panel .pwr.on{color:var(--acc); border-color:var(--acc)}
+/* owners seen in the current snapshot, one click to exclude */
+#panel .chips{display:flex; flex-wrap:wrap; gap:5px}
+#panel .chips button{
+  background:var(--bg); border:1px solid var(--line2); color:var(--fg);
+  border-radius:11px; cursor:pointer; font:inherit; padding:3px 10px;
+}
+#panel .chips button:hover{border-color:var(--acc); color:var(--acc)}
+#panel .chips button:disabled{opacity:.35; cursor:default; text-decoration:line-through}
+#panel .field{display:flex; align-items:center; gap:8px; margin-bottom:4px}
+#panel .field input[type=number]{width:80px}
+#panel .quick{display:flex; gap:3px}
+#panel .quick button{
+  background:none; border:1px solid var(--line2); color:var(--dimmer);
+  border-radius:3px; cursor:pointer; font:inherit; padding:2px 8px;
+}
+#panel .quick button:hover{color:var(--fg)}
+#panel .quick button.on{color:var(--acc); border-color:var(--acc)}
+#panel .legend{display:inline-flex; gap:3px; align-items:center}
+#panel .legend i{width:22px; height:9px; border-radius:2px; display:inline-block}
+#panel .rhdr{color:var(--dimmer); padding-bottom:1px}
+/* the add row reads as a separate act from editing what's already there */
+#panel .rules .addrow input{border-style:dashed}
+#panel .rules .addrow input:focus{border-style:solid}
+/* ---- toast ---- */
+#toast{
+  position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(14px);
+  z-index:60; max-width:min(760px,90vw); padding:9px 14px; white-space:pre-wrap;
+  background:var(--bg2); border:1px solid var(--line2); border-radius:5px;
+  box-shadow:0 6px 22px rgba(0,0,0,.75); color:var(--fg); cursor:pointer;
+  opacity:0; pointer-events:none; transition:opacity .18s, transform .18s;
+}
+#toast.show{opacity:1; transform:translateX(-50%) translateY(0); pointer-events:auto}
+#toast.bad{border-color:var(--bad); color:var(--bad)}
+/* ---- right-click menu ---- */
+#menu{
+  position:fixed; z-index:50; min-width:190px; padding:4px 0;
+  background:var(--bg2); border:1px solid var(--line2); border-radius:4px;
+  box-shadow:0 6px 22px rgba(0,0,0,.75); user-select:none;
+}
+#menu.hidden{display:none}
+#menu .mi{padding:4px 12px; color:var(--fg); cursor:pointer; white-space:nowrap}
+#menu .mi:hover{background:var(--accdim); color:var(--acc)}
+#menu .mi.warn:hover{background:rgba(240,113,120,.16); color:var(--bad)}
+#menu .sep{height:1px; margin:4px 0; background:var(--line)}
+#menu .hd{padding:3px 12px 5px; color:var(--dimmer); font-size:11px}
 .copyable{cursor:pointer}
 tbody td.copyable:hover{color:var(--acc)}
 td.copyable.copied{color:var(--ok)}
@@ -141,20 +288,137 @@ tr:hover .kbtn{opacity:.7}
   <span class="stat">↓ <b class="dn" id="tDnR">0</b> <b id="tDnT" >—</b></span>
   <span class="stat">↑ <b class="up" id="tUpR">0</b> <b id="tUpT">—</b></span>
   <span class="stat"><b id="tCnt">0</b> conns</span>
-  <input id="filter" placeholder="filter: proc, ip, port, cc, user…" spellcheck="false">
+  <input id="filter" placeholder="filter: proc, ip, port, cc, user…" spellcheck="false"
+         title="space-separated terms, all must match; -term excludes; quote phrases: &quot;google llc&quot;">
+  <!-- Two states, not three: you are either looking at what this machine
+       has open to the world, or at what it is talking to. "All" mixed the
+       two into a list that answered neither question. -->
   <div class="tabs" id="tabs">
-    <button data-v="all">All</button>
-    <button data-v="listen">Listening</button>
-    <button data-v="est" class="on">Established</button>
+    <button id="viewBtn" data-v="est" class="on"
+            title="click to switch between connections and listening ports">Established</button>
   </div>
   <button class="tgl" id="dns" title="reverse DNS lookups">dns</button>
+  <button class="tgl" id="owner" title="look up who owns the IP range (RDAP) for addresses reverse DNS can't name — queries a third party">owner</button>
+  <button class="tgl" id="alias" title="show your saved aliases instead of addresses — right-click any address to add one">alias</button>
   <button class="tgl" id="local" title="show local — LAN / loopback (🏠 🔁) connections">local</button>
   <button class="tgl" id="pause" title="freeze display — Space (data keeps collecting)">pause</button>
   <label class="stat" id="ratebox" title="display refresh interval (seconds)">every
     <input id="rate" type="number" min="0.25" step="0.25" value="2"> s</label>
+  <span class="stat" id="hidbox" hidden></span>
   <span id="spacer"></span>
+  <button id="gear" title="settings — aliases and hide rules">⚙</button>
   <span class="stat" id="clock"></span>
   <div id="wsdot" title="websocket"></div>
+</div>
+<div id="menu" class="hidden"></div>
+<div id="veil" class="hidden"></div>
+<div id="panel" class="hidden">
+  <h2>settings <span class="x" id="panelx" title="close (Esc)">✕</span></h2>
+  <!-- Tabs, because the panel now holds four unrelated jobs and stacking
+       them meant scrolling past aliases to reach a checkbox. -->
+  <div class="ptabs" id="ptabs">
+    <button data-t="names" class="on">Names</button>
+    <button data-t="owners">Owners</button>
+    <button data-t="traffic">Traffic</button>
+    <button data-t="actions">Actions</button>
+    <button data-t="about">About</button>
+  </div>
+  <section data-tab="names">
+    <h3>Aliases</h3>
+    <div class="hint">Your own name for an address. Match an IP
+      (<span class="mono">160.79.104.10</span>), a range
+      (<span class="mono">160.79.104.0/21</span>), or any text that appears
+      in a hostname or owner (<span class="mono">anthropic</span>). The most
+      specific range wins.</div>
+    <div class="rules">
+      <div class="rhdr">Match</div><div class="rhdr">Show as</div><div></div>
+      <div id="aliasList"></div>
+      <div class="cols addrow" id="aliasAdd">
+        <input id="aliasM" placeholder="IP, CIDR or name" spellcheck="false">
+        <input id="aliasN" placeholder="show as…" spellcheck="false">
+        <button class="addbtn" id="aliasAddBtn">add</button>
+      </div>
+    </div>
+  </section>
+  <section data-tab="names">
+    <h3>Hidden</h3>
+    <div class="hint">Rows matching these are counted but not shown, unless
+      you click <span class="mono">N hidden</span> in the bar. Same match
+      forms as aliases, and a name here matches the alias, owner or hostname
+      a row is known by.</div>
+    <div class="rules one">
+      <div class="rhdr">Match</div><div></div>
+      <div id="hideList"></div>
+      <div class="cols addrow" id="hideAdd">
+        <input id="hideM" placeholder="IP, CIDR or name" spellcheck="false">
+        <button class="addbtn" id="hideAddBtn">add</button>
+      </div>
+    </div>
+  </section>
+  <section data-tab="owners">
+    <h3>Excluded owners</h3>
+    <div class="hint">Hide everything belonging to an organisation. Unlike a
+      hide rule, this matches the <em>owner</em> only — excluding
+      <span class="mono">Cloudflare</span> will not catch a host that merely
+      has the word in its hostname. Switch one off to park it without losing
+      it. Needs the <span class="mono">owner</span> toggle on to have
+      anything to match.</div>
+    <div class="rules one">
+      <div class="rhdr">Owner</div><div></div>
+      <div id="exclList"></div>
+      <div class="cols addrow" id="exclAdd">
+        <input id="exclM" placeholder="organisation name" spellcheck="false">
+        <button class="addbtn" id="exclAddBtn">add</button>
+      </div>
+    </div>
+    <h3>Seen right now</h3>
+    <div class="hint">Owners in the current snapshot — click one to exclude
+      it.</div>
+    <div id="ownerSeen" class="chips"></div>
+  </section>
+  <section data-tab="traffic">
+    <h3>Minimum rate</h3>
+    <div class="hint">Hide connections moving less than this. Idle sockets
+      stay out of the way; anything above the line is real traffic. Counted
+      rows still appear in <span class="mono">N hidden</span>.</div>
+    <div class="field">
+      <input id="minRate" type="number" min="0" step="0.5" value="0">
+      <span class="mono">KB/s</span>
+      <span class="quick" id="minRateQuick">
+        <button data-r="0">off</button><button data-r="1">1</button
+        ><button data-r="10">10</button><button data-r="100">100</button>
+      </span>
+    </div>
+    <h3>Rate bars</h3>
+    <div class="hint">The bar behind each KB/s figure. Scaled colour keeps a
+      trickle faint and makes a megabyte a second impossible to miss; fixed
+      colour is the old flat cyan at every speed.</div>
+    <div class="field">
+      <button class="tgl" id="barScale">scaled colour</button>
+      <span class="legend" id="barLegend"></span>
+    </div>
+  </section>
+  <section data-tab="actions">
+    <h3>Confirm before killing</h3>
+    <div class="hint">Ask first, every time a process is sent a signal —
+      the <span class="mono">✕</span> button and both right-click entries,
+      SIGTERM and SIGKILL alike. There is no undo for a kill, and the row
+      you clicked is one line among hundreds that reorder themselves as
+      traffic moves. Turn it off if you would rather not be asked.</div>
+    <div class="field">
+      <button class="tgl" id="confirmKill">confirm kills</button>
+    </div>
+    <h3>Privileged actions</h3>
+    <div class="hint" id="privHint"></div>
+  </section>
+  <section data-tab="about">
+    <div class="hint" id="udpHint" hidden></div>
+  </section>
+  <section data-tab="about">
+    <div class="hint">Stored in <span class="path" id="cfgPath">~/.config/porthawk</span>
+      — <span class="mono">rules.json</span> is plain JSON and safe to edit by
+      hand; changes made here are written immediately.</div>
+  </section>
 </div>
 <div id="wrap">
   <table>
@@ -180,8 +444,19 @@ tr:hover .kbtn{opacity:.7}
 'use strict';
 const $=s=>document.querySelector(s);
 const tb=$('#tb');
-let snap=null, paused=false, view='est', filter='', firstSnap=true;
+// snap is what the table draws; latest is what the wire last delivered.
+// They are the same object except while paused, when snap is deliberately
+// held at the frozen moment — otherwise anything that repaints on demand
+// (expanding a group, sorting, editing a rule) would quietly show live
+// data and pause would be a lie.
+let snap=null, latest=null, paused=false, view='est', filter='', firstSnap=true;
+// Display prefs with no server side: a floor on the rate a row must be
+// moving to earn a line, and whether the rate bar's colour tracks
+// magnitude. Both are read from localStorage at the bottom of the file.
+let minRate=0, barScale=true, confirmKill=true;
 let showLocal=false;   // hide LAN / loopback by default
+let useAlias=true;     // show saved aliases in place of addresses
+let applyHide=true;    // honour saved hide rules
 let refreshMs=2000, refreshTimer=0;
 let colsLocked=false, lockScheduled=false;
 let sortK='down', sortDir=-1;   // default: ↓ Total, descending
@@ -199,7 +474,49 @@ const fmtTot=k=>{
   return k.toFixed(0)+' KB';
 };
 const barW=k=> k<=0?0 : Math.min(100, Math.log10(1+k)/4*100); // full at ~10MB/s
+// Bar colour by magnitude. Width alone can't separate 100 KB/s from 1 MB/s
+// at a glance — on a log scale those are only a quarter of the cell apart.
+// Colour carries the order of magnitude instead: a trickle stays as faint
+// as it was, and each decade above 1 KB/s gets warmer and more opaque, so
+// the eye lands on the loud rows without having to read any numbers.
+const BAR_STOPS=[
+  {k:0,    c:'92,207,230', a:.13},  // idle-ish: the old flat cyan
+  {k:1,    c:'92,207,230', a:.20},
+  {k:10,   c:'135,217,108', a:.28}, // steady
+  {k:100,  c:'255,213,128', a:.40}, // busy
+  {k:1000, c:'240,113,120', a:.55}, // saturating the link
+];
+function barColor(k){
+  if(!barScale) return 'var(--accdim)';
+  if(k<=0) return 'transparent';
+  // interpolate on log10 so each decade gets equal visual distance
+  const x=Math.log10(Math.max(k,.01));
+  let lo=BAR_STOPS[0], hi=BAR_STOPS[BAR_STOPS.length-1];
+  for(let i=0;i<BAR_STOPS.length-1;i++){
+    const a=BAR_STOPS[i], b=BAR_STOPS[i+1];
+    if(x>=Math.log10(Math.max(a.k,.01)) && x<=Math.log10(b.k)){ lo=a; hi=b; break; }
+    if(x>Math.log10(b.k)) lo=hi=b;
+  }
+  const la=Math.log10(Math.max(lo.k,.01)), lb=Math.log10(Math.max(hi.k,.01));
+  const t=lb>la?Math.min(1,Math.max(0,(x-la)/(lb-la))):0;
+  const mix=(p,q)=>p.split(',').map((v,i)=>Math.round(+v+( +q.split(',')[i]-+v)*t));
+  const [r,g,b]=mix(lo.c,hi.c);
+  const alpha=(lo.a+(hi.a-lo.a)*t).toFixed(3);
+  return 'rgba('+r+','+g+','+b+','+alpha+')';
+}
 const addr=(a,p)=> (a.includes(':')?'['+a+']':a)+':'+p;
+
+// Country names come from the browser (Intl), so there is no table of 250
+// countries to ship or keep current.
+const regionName=(()=>{
+  let dn=null;
+  try{ dn=new Intl.DisplayNames([navigator.language||'en'],{type:'region'}); }catch(_){}
+  return cc=>{ if(!cc)return''; try{ return dn?(dn.of(cc)||cc):cc; }catch(_){ return cc; } };
+})();
+// Symbolic flags stand for a kind of route, not a country.
+const FLAGWHAT={'🔁':'loopback — this machine','🏠':'private / LAN address',
+                '🛡':'routed over a VPN / tunnel interface','🏳️':'country unknown'};
+const flagTitle=c=> FLAGWHAT[c.flag] || (c.cc?regionName(c.cc)+' ('+c.cc+')':'');
 
 // ---- websocket ----
 function connect(){
@@ -207,8 +524,12 @@ function connect(){
   ws.onopen =()=>$('#wsdot').classList.add('on');
   ws.onclose=()=>{$('#wsdot').classList.remove('on'); setTimeout(connect,1500);};
   ws.onmessage=e=>{
-    snap=JSON.parse(e.data);
-    $('#dns').classList.toggle('on', snap.dns);
+    latest=JSON.parse(e.data);
+    if(!paused||!snap)snap=latest; // pausing before the first frame would leave a blank table
+    // toggle state is server state, not table data: it stays live so the
+    // buttons never lie about what the backend is actually doing
+    $('#dns').classList.toggle('on', latest.dns);
+    $('#owner').classList.toggle('on', latest.owner);
     // snapshots arrive ~1/s; the refresh timer drives the redraw so the
     // display updates at the user's chosen interval. Paint the very first
     // one immediately so the table isn't blank until the first tick.
@@ -227,21 +548,43 @@ function applyRate(sec){
 }
 
 // ---- row model ----
-// Remote cell: when DNS is on and the host resolved, show host:port in
-// place of the raw IP; otherwise the IP. host kept separately for filter.
-function remoteDisp(c){
+// Remote cell naming, most authoritative first: your own alias, then
+// reverse DNS, then who the IP range is registered to, then the raw
+// address. Each source has its own toggle; with all of them off you get
+// the plain IP, and the IP is what click-to-copy always yields.
+function remoteLabel(c){
   const hasPeer=(c.rp!==0||(c.ra!=='0.0.0.0'&&c.ra!=='::'&&c.ra!=='invalid IP'));
-  if(!hasPeer)return'';
-  if(snap&&snap.dns&&c.host)return c.host+':'+c.rp;
-  return addr(c.ra,c.rp);
+  if(!hasPeer)return{txt:'',cls:''};
+  if(useAlias&&c.alias)          return{txt:c.alias+':'+c.rp, cls:'alias'};
+  // An address on one of our own adapters is named by that adapter. No
+  // toggle: it costs nothing and leaks nothing.
+  if(c.if)                       return{txt:c.if+':'+c.rp,    cls:''};
+  if(snap&&snap.dns&&c.host)     return{txt:c.host+':'+c.rp,  cls:''};
+  if(snap&&snap.owner&&c.owner)  return{txt:c.owner+':'+c.rp, cls:'owner'};
+  return{txt:addr(c.ra,c.rp), cls:''};
+}
+const remoteDisp=c=>remoteLabel(c).txt;
+// Local cell follows the same toggles and the same order: an alias on the
+// local address wins over reverse DNS (hosts file, mDNS, a public address
+// with a PTR) and over RDAP ownership, which applies whenever the local
+// address is routable.
+function localLabel(c){
+  if(!c.la||c.la==='0.0.0.0'||c.la==='::'||c.la==='invalid IP')return{txt:addr(c.la,c.lp),cls:''};
+  if(useAlias&&c.lalias)          return{txt:c.lalias+':'+c.lp, cls:'alias'};
+  if(c.lif)                       return{txt:c.lif+':'+c.lp,   cls:''};
+  if(snap&&snap.dns&&c.lhost)     return{txt:c.lhost+':'+c.lp, cls:''};
+  if(snap&&snap.owner&&c.lowner)  return{txt:c.lowner+':'+c.lp, cls:'owner'};
+  return{txt:addr(c.la,c.lp), cls:''};
 }
 function rowVals(c){
   return {
-    cc:c.cc||'', comm:c.comm||'—', pid:c.pid<0?'':c.pid, user:c.user,
+    cc:c.cc||'', comm:c.comm||'—', app:c.app||'', pid:c.pid<0?'':c.pid, user:c.user,
     proto:c.proto, state:c.state,
-    local:addr(c.la,c.lp),
+    local:localLabel(c).txt,
     remote:remoteDisp(c),
-    host:c.host||'',
+    host:c.host||'', owner:c.owner||'', alias:c.alias||'', ip:c.ra||'',
+    lhost:c.lhost||'', lowner:c.lowner||'', lalias:c.lalias||'',
+    iface:c.if||'', liface:c.lif||'',
     // per-connection TCP counters; UDP rows have none (group header
     // carries the per-process numbers, which include UDP)
     downRate:c.downRate||0, upRate:c.upRate||0,
@@ -258,22 +601,35 @@ function flash(el){
   setTimeout(()=>el.classList.remove('new'),1500);
 }
 
+function copyIP(td){
+  const ip=td.dataset.ip; if(!ip)return;
+  navigator.clipboard.writeText(ip);
+  td.classList.add('copied'); setTimeout(()=>td.classList.remove('copied'),600);
+}
+
 function makeRow(c){
   const tr=document.createElement('tr');
+  tr._id=c.id;
   if(!firstSnap && c.state!=='DISCONNECTED')flash(tr); // new conns only; never green-flash a ghost
   const tds={};
   for(const k of COLS){
     const td=document.createElement('td');
-    if(k==='comm')td.className='comm';
-    else if(k==='pid'){td.className='pid num';td.title='click: copy PID';
+    if(k==='comm'){td.className='comm';
+      td.oncontextmenu=e=>{e.preventDefault();openProcMenu(e,tr._id);};}
+    else if(k==='pid'){td.className='pid num';td.title='click: copy PID · right-click: more';
       td.onclick=()=>{navigator.clipboard.writeText(String(td.textContent));
-        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};}
+        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};
+      td.oncontextmenu=e=>{e.preventDefault();openProcMenu(e,tr._id);};}
     else if(k==='state')td.className='state';
     else if(k==='user')td.className='user';
-    else if(k==='local'||k==='remote'){td.className=k+' copyable';td.title='click: copy IP';
-      td.onclick=()=>{const ip=td.dataset.ip; if(!ip)return;
-        navigator.clipboard.writeText(ip);
-        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};}
+    else if(k==='local'||k==='remote'){td.className=k+' copyable';
+      // Click copies the address whatever the cell is displaying — an
+      // alias or hostname is a label, the IP is the thing you paste.
+      td.onclick=()=>copyIP(td);
+      td.oncontextmenu=e=>{e.preventDefault();openMenu(e,tr._id,k);};
+      if(k==='remote'){const f=document.createElement('span');f.className='flg';
+        const l=document.createElement('span');l.className='lbl';
+        td.appendChild(f); td.appendChild(l);}}
     else if(k==='downRate'||k==='upRate'){td.className='rate num';
       const b=document.createElement('div');b.className='bar';td.appendChild(b);
       const s=document.createElement('span');td.appendChild(s);}
@@ -293,12 +649,26 @@ function patchRow(r,c){
   if(t.state.textContent!==v.state){t.state.textContent=v.state;t.state.className='state '+v.state;}
   r.el.classList.toggle('ghost',c.state==='DISCONNECTED');
   setTxt(t.local,v.local);
-  // flag (geo of the remote peer) sits next to the remote address
-  setTxt(t.remote, v.remote?((c.flag?c.flag+' ':'')+v.remote):'');
+  const llab=localLabel(c), lcl='local copyable'+(llab.cls?' '+llab.cls:'');
+  if(t.local.className!==lcl)t.local.className=lcl;
+  const lknown=[c.lif&&'adapter: '+c.lif, c.lhost&&'dns: '+c.lhost, c.lowner&&'owner: '+c.lowner].filter(Boolean).join(' · ');
+  t.local.title=(lknown?lknown+'\n':'')+'click: copy '+(c.la||'IP')+' · right-click: alias / hide';
+  // flag (geo of the remote peer) sits next to the remote address in its
+  // own span, so hovering it explains the country or the symbol
+  const lab=remoteLabel(c), fl=t.remote.firstChild, lbl=t.remote.lastChild;
+  setTxt(fl, v.remote&&c.flag?c.flag+' ':'');
+  fl.title=v.remote?flagTitle(c):'';
+  setTxt(lbl, v.remote||'');
+  const lcls='lbl'+(lab.cls?' '+lab.cls:'');
+  if(lbl.className!==lcls)lbl.className=lcls;
   // raw IPs stashed for click-to-copy (always the IP, never the hostname)
   t.local.dataset.ip=c.la||'';
   t.remote.dataset.ip=(c.ra&&c.ra!=='0.0.0.0'&&c.ra!=='::'&&c.ra!=='invalid IP')?c.ra:'';
-  t.remote.title=c.cc?('click: copy IP · '+c.cc):'click: copy IP';
+  r.el.classList.toggle('hid',!!c.hide);
+  const known=[c.alias&&'alias: '+c.alias, c.if&&'adapter: '+c.if, c.host&&'dns: '+c.host,
+               c.owner&&'owner: '+c.owner, c.pfx&&'range: '+c.pfx,
+               c.cc&&regionName(c.cc)].filter(Boolean).join(' · ');
+  t.remote.title=(known?known+'\n':'')+'click: copy '+(c.ra||'IP')+' · right-click: alias / hide';
   rate(t.downRate,v.downRate); rate(t.upRate,v.upRate);
   setTxt(t.down,fmtTot(v.down)); setTxt(t.up,fmtTot(v.up));
   killBtn(r,c);
@@ -310,6 +680,8 @@ function rate(td,k){
   const txt=k>0?fmtRate(k):'';
   if(s.textContent!==txt)s.textContent=txt;
   b.style.width=barW(k)+'%';
+  const col=barColor(k);
+  if(b.style.background!==col)b.style.background=col;
 }
 function killBtn(r,c){
   const kc=r.tds._kill;
@@ -323,33 +695,530 @@ function killBtn(r,c){
     kc.appendChild(b);
   }
   b.dataset.pid=c.pid;
+  // From c, not from r.data: killBtn runs during patchRow, before r.data
+  // has been assigned this tick's row, so reaching through it is a null
+  // dereference that kills the whole render.
+  b.dataset.label=c.app||c.comm||'this process';
 }
+// One gate in front of every way to signal a process — the ✕ button, both
+// context-menu entries, and their authenticate-as-root counterparts. There
+// is no undo for a SIGKILL, and the row you clicked is one line among
+// hundreds that reorder themselves as traffic moves, so "which process was
+// that" is a real question. Switchable off in settings for anyone who
+// finds the prompt more annoying than the mistake.
+function killGuard(pid,label,sig,root,go){
+  if(!confirmKill)return go();
+  const what=sig==='kill'?'Force kill':'Terminate';
+  const how=sig==='kill'
+    ? 'SIGKILL — the process is stopped immediately and cannot save or clean up.'
+    : 'SIGTERM — asks the process to shut down.';
+  if(confirm(what+' '+label+'  (PID '+pid+')?\n\n'+how
+      +(root?'\n\nThis is another user\'s process, so you will be asked to authenticate.':'')))
+    go();
+}
+
 function doKill(b){
-  const pid=+b.dataset.pid;
-  if(!b.classList.contains('confirm')){
-    b.classList.add('confirm'); b.textContent='sure?';
-    setTimeout(()=>{b.classList.remove('confirm');
-      b.textContent=killStage.get(pid)==='term'?'9!':'✕';},2200);
-    return;
-  }
+  const pid=+b.dataset.pid, label=b.dataset.label||'this process';
   const sig=killStage.get(pid)==='term'?'kill':'term';
+  killGuard(pid,label,sig,false,()=>{
+    fetch('/api/kill',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({pid,sig})})
+      .then(res=>{ if(res.ok){killStage.set(pid,sig);} });
+    b.textContent = sig==='term' ? '9!' : '✕';   // escalation available
+    b.title = sig==='term' ? 'still alive? SIGKILL' : 'kill process';
+  });
+}
+
+// A privileged action takes as long as someone takes to answer a password
+// prompt, and can fail for reasons worth reading (declined, no agent, ufw
+// refused the rule). Silence would leave you guessing, so say what
+// happened and leave failures up long enough to read.
+function toast(msg,bad){
+  let t=$('#toast');
+  if(!t){
+    t=document.createElement('div'); t.id='toast'; document.body.appendChild(t);
+    t.onclick=()=>t.classList.remove('show');
+  }
+  t.textContent=msg;
+  t.className='show'+(bad?' bad':'');
+  clearTimeout(t._h);
+  t._h=setTimeout(()=>t.classList.remove('show'), bad?12000:3500);
+}
+
+// ---- right-click menu: alias / hide / exclude ----
+const menu=$('#menu');
+function closeMenu(){ menu.classList.add('hidden'); }
+addEventListener('click',closeMenu);
+addEventListener('keydown',e=>{if(e.key==='Escape')closeMenu();});
+addEventListener('scroll',closeMenu,true);
+
+function rule(op,match,name){
+  return fetch('/api/rules',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({op,match,name:name||''})})
+    .then(res=>res.ok?res.json():null)
+    .then(rs=>{ if(rs&&snap){snap.rules=rs; render(); drawPanel();} }); // no waiting for the next tick
+}
+// Rules the UI can offer to remove: exact address/range matches, plus name
+// rules that match a name this row is known by. Server-side matching is
+// authoritative (it does real CIDR containment); this is only for building
+// the menu, so equality and substring are enough.
+function rulesFor(c,list){
+  const names=[c.alias,c.owner,c.host].filter(Boolean).map(s=>s.toLowerCase());
+  return (list||[]).filter(r=>{
+    const m=(r.match||'').toLowerCase();
+    return m===(c.ra||'').toLowerCase() || m===(c.pfx||'').toLowerCase() ||
+           names.some(n=>n.includes(m));
+  });
+}
+
+// Privileged actions go to the server, which hands them to pkexec: the
+// desktop puts up an authentication prompt and a human approves that one
+// action. So the reply can take as long as someone takes to type a
+// password, and "declined" is an ordinary outcome, not an error.
+function elevated(url,body,what){
+  return fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify(body)})
+    .then(res=>res.ok?res.json():{error:'request failed ('+res.status+')'})
+    .then(r=>{
+      if(r.ok){ toast(what+' — done'); return true; }
+      // Always show what would have run, so an action refused here can
+      // still be carried out by hand.
+      const cmd=(r.cmd||[]).join(' ');
+      toast(what+' failed: '+(r.error||r.output||'unknown')+(cmd?'\n'+cmd:''),true);
+      return false;
+    })
+    .catch(err=>{ toast(what+' failed: '+err,true); return false; });
+}
+
+// Process menu: the identifying details, and the ways to end it.
+function openProcMenu(e,id){
+  const r=rows.get(id); if(!r)return;
+  const c=r.data.c, v=r.data.v;
+  if(c.pid<0){ return; } // unattributed row: nothing to act on
+  const label=c.app||v.comm||'?';
+  const items=[];
+  const add=(l,fn,cls)=>items.push({label:l,fn,cls});
+
+  add('copy PID '+c.pid, ()=>navigator.clipboard.writeText(String(c.pid)));
+  add('copy name "'+label+'"', ()=>navigator.clipboard.writeText(label));
+  if(v.comm&&v.comm!==label)
+    add('copy command "'+v.comm+'"', ()=>navigator.clipboard.writeText(v.comm));
+  items.push({sep:true});
+
+  const mine=snap&&c.uid===snap.me;
+  if(mine){
+    add('terminate '+label+' (SIGTERM)',
+      ()=>killGuard(c.pid,label,'term',false,()=>signal(c.pid,'term')),'warn');
+    add('kill '+label+' (SIGKILL)',
+      ()=>killGuard(c.pid,label,'kill',false,()=>signal(c.pid,'kill')),'warn');
+  }else if(snap&&snap.priv){
+    // Another user's process: the kernel refuses our signal and the
+    // server refuses to try, so this is the authenticated route.
+    add('terminate as root (SIGTERM)…',
+      ()=>killGuard(c.pid,label,'term',true,
+        ()=>elevated('/api/killroot',{pid:c.pid,sig:'term'},'terminate '+c.pid)),'warn');
+    add('kill as root (SIGKILL)…',
+      ()=>killGuard(c.pid,label,'kill',true,
+        ()=>elevated('/api/killroot',{pid:c.pid,sig:'kill'},'kill '+c.pid)),'warn');
+  }
+  showMenu(e,items,label+'  ·  '+c.pid+'  ·  '+v.user);
+}
+function signal(pid,sig){
   fetch('/api/kill',{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({pid,sig})})
-    .then(res=>{ if(res.ok){killStage.set(pid,sig);} });
-  b.classList.remove('confirm');
-  b.textContent = sig==='term' ? '9!' : '✕';   // escalation available
-  b.title = sig==='term' ? 'still alive? SIGKILL' : 'kill process';
+    .then(res=>{ if(!res.ok)return res.text().then(t=>toast('kill failed: '+t.trim(),true)); });
+}
+
+function openMenu(e,id,col){
+  const r=rows.get(id); if(!r)return;
+  const c=r.data.c;
+  const ip = col==='local' ? c.la : c.ra;
+  if(!ip||ip==='0.0.0.0'||ip==='::'||ip==='invalid IP')return;
+  const name=c.alias||c.owner||c.host||'';
+  const items=[];
+  const add=(label,fn,cls)=>items.push({label,fn,cls});
+
+  add('copy '+ip, ()=>navigator.clipboard.writeText(ip));
+  items.push({sep:true});
+
+  const cur=(snap&&snap.rules&&snap.rules.aliases||[]).find(a=>(a.match||'').toLowerCase()===ip.toLowerCase());
+  add((cur?'rename':'alias')+' '+ip+' …', ()=>{
+    const v=prompt('Name for '+ip+':', cur?cur.name:name);
+    if(v!==null&&v.trim())rule('alias',ip,v.trim());
+  });
+  if(c.pfx&&c.pfx!==ip+'/32')
+    add('alias range '+c.pfx+' …', ()=>{
+      const v=prompt('Name for the whole range '+c.pfx+':', name);
+      if(v!==null&&v.trim())rule('alias',c.pfx,v.trim());
+    });
+  for(const a of rulesFor(c,snap&&snap.rules&&snap.rules.aliases))
+    add('remove alias "'+a.name+'" ('+a.match+')', ()=>rule('unalias',a.match),'warn');
+
+  items.push({sep:true});
+  const hides=rulesFor(c,snap&&snap.rules&&snap.rules.hidden);
+  add('hide '+ip, ()=>rule('hide',ip));
+  if(c.pfx&&c.pfx!==ip+'/32') add('hide range '+c.pfx, ()=>rule('hide',c.pfx));
+  if(name) add('hide everything named "'+name+'"', ()=>rule('hide',name));
+  for(const h of hides)
+    add('unhide '+h.match, ()=>rule('unhide',h.match),'warn');
+
+  // Owner exclusion: a saved, owner-only rule, managed in settings.
+  const own=c.owner||c.lowner;
+  if(own){
+    const excl=(snap&&snap.rules&&snap.rules.excluded)||[];
+    const has=excl.find(e=>(e.match||'').toLowerCase()===own.toLowerCase());
+    if(has) add('stop excluding owner "'+own+'"', ()=>rule('unexclude',own),'warn');
+    else    add('exclude owner "'+own+'"', ()=>rule('exclude',own));
+  }
+
+  items.push({sep:true});
+  // Transient, filter-box exclusion — distinct from a saved hide rule:
+  // it lasts until you clear the filter and is never written to disk.
+  add('exclude '+(name||ip)+' from filter', ()=>addFilterTerm('-'+(name||ip)));
+  add('show only '+(name||ip), ()=>addFilterTerm(name||ip));
+
+  // Firewall. Only offered for the remote end — "block" means stop this
+  // machine talking to that address, and a rule against your own address
+  // would be nonsense. Authenticated per action at the desktop.
+  if(col==='remote'&&snap&&snap.priv){
+    items.push({sep:true});
+    add('block '+ip+' in ufw…', ()=>{
+      if(confirm('Block outbound traffic to '+ip+'?\n\n'
+        +'Adds a ufw rule:  ufw insert 1 deny out to '+ip+'\n'
+        +'You will be asked to authenticate.\n\n'
+        +(c.owner?'Note: '+c.owner+' likely serves this from many addresses, '
+                 +'so blocking one may not stop much.\n\n':'')
+        +'Undo it from this menu, or with: ufw delete deny out to '+ip))
+        elevated('/api/block',{ip},'block '+ip);
+    },'warn');
+    add('unblock '+ip+' in ufw…',
+      ()=>elevated('/api/block',{ip,undo:true},'unblock '+ip));
+  }
+
+  showMenu(e,items,name?name+'  ·  '+ip:ip);
+}
+
+// showMenu paints an item list at the cursor. Shared so every menu looks
+// and behaves the same, and there is one place that keeps it on screen.
+function showMenu(e,items,heading){
+  menu.textContent='';
+  const hd=document.createElement('div'); hd.className='hd';
+  hd.textContent=heading;
+  menu.appendChild(hd);
+  for(const it of items){
+    if(it.sep){const d=document.createElement('div');d.className='sep';menu.appendChild(d);continue;}
+    const d=document.createElement('div');
+    d.className='mi'+(it.cls?' '+it.cls:'');
+    d.textContent=it.label;
+    d.onclick=ev=>{ev.stopPropagation();closeMenu();it.fn();};
+    menu.appendChild(d);
+  }
+  menu.classList.remove('hidden');
+  // keep it on screen when right-clicking near an edge
+  const w=menu.offsetWidth, h=menu.offsetHeight;
+  menu.style.left=Math.min(e.clientX, innerWidth-w-6)+'px';
+  menu.style.top =Math.min(e.clientY, innerHeight-h-6)+'px';
+}
+
+// ---- settings panel ----
+// Rules arrive in every snapshot, so the panel is a view of snap.rules and
+// redraws itself whenever the server confirms a change. Editing a rule is
+// remove-then-add, because a rule is identified by its match string.
+let panelOpen=false;
+function openPanel(){
+  panelOpen=true;
+  $('#veil').classList.remove('hidden');
+  $('#panel').classList.remove('hidden');
+  $('#gear').classList.add('on');
+  drawPanel();
+  $('#aliasM').focus();
+}
+function closePanel(){
+  panelOpen=false;
+  $('#veil').classList.add('hidden');
+  $('#panel').classList.add('hidden');
+  $('#gear').classList.remove('on');
+}
+$('#gear').onclick=()=>panelOpen?closePanel():openPanel();
+$('#panelx').onclick=closePanel;
+$('#veil').onclick=closePanel;
+addEventListener('keydown',e=>{if(e.key==='Escape'&&panelOpen)closePanel();});
+
+// A rule edit is only committed on blur or Enter — not per keystroke, which
+// would write the file on every character and fight the redraw.
+function ruleInput(value,ph,commit){
+  const i=document.createElement('input');
+  i.value=value; i.placeholder=ph; i.spellcheck=false;
+  i.onkeydown=e=>{
+    if(e.key==='Enter'){i.blur();}
+    else if(e.key==='Escape'){i.value=value; i.blur();}
+    e.stopPropagation();  // Space must not hit the pause shortcut
+  };
+  i.onblur=()=>{
+    const v=i.value.trim();
+    if(v===value)return;
+    if(!v){i.value=value; return;}   // clearing a field is not a delete
+    commit(v);
+  };
+  return i;
+}
+
+function drawPanel(){
+  if(!panelOpen)return;
+  // The 1 s snapshot must never yank a field out from under the cursor:
+  // while a rule field has focus, leave the list alone.
+  const act=document.activeElement;
+  if(act&&act.tagName==='INPUT'&&$('#panel').contains(act)&&act.closest('#aliasList,#hideList,#exclList'))
+    return;
+  const rules=(snap&&snap.rules)||{aliases:[],hidden:[],excluded:[]};
+  $('#cfgPath').textContent=(snap&&snap.cfg)||'~/.config/porthawk';
+
+  // Per-socket UDP counters come from an optional eBPF program. Say so
+  // when it isn't running, because the symptom otherwise looks like a
+  // lying table: UDP rows read zero while the process total climbs.
+  const ph=$('#privHint');
+  ph.textContent=(snap&&snap.priv)
+    ? 'Blocking an address in ufw, and signalling another user\'s process, '
+      +'are offered. Both need root, which porthawk does not have: each one '
+      +'is authenticated separately by your desktop, so this browser tab '
+      +'alone can never carry them out. Start with -privileged=false to '
+      +'remove them entirely.'
+    : 'Disabled (-privileged=false). ufw blocking and killing another '
+      +'user\'s process are not offered, and their endpoints do not exist.';
+
+  const uh=$('#udpHint');
+  uh.hidden=!snap;
+  if(snap){
+    uh.textContent=snap.udpAcct
+      ? 'Per-connection UDP/QUIC byte counters are active (eBPF).'
+      : 'Per-connection UDP/QUIC byte counters are off, so UDP rows read zero '
+        +'and that traffic shows only in the per-process total — hover a KB/s '
+        +'cell to see how much is unattributed. Reason: '+(snap.udpWhy||'unknown')
+        +'. Needs a kernel with BTF and the cap_bpf + cap_perfmon capabilities '
+        +'(see the Makefile).';
+  }
+
+  const al=$('#aliasList'); al.textContent='';
+  if(!(rules.aliases||[]).length){
+    const d=document.createElement('div'); d.className='empty';
+    d.textContent='none yet — right-click any address in the table, or add one below';
+    al.appendChild(d);
+  }
+  for(const a of rules.aliases||[]){
+    const row=document.createElement('div'); row.className='cols';
+    row.appendChild(ruleInput(a.match,'IP, CIDR or name',v=>{
+      // match is the identity of the rule: move it rather than duplicate.
+      rule('unalias',a.match).then(()=>rule('alias',v,a.name));
+    }));
+    row.appendChild(ruleInput(a.name,'show as…',v=>rule('alias',a.match,v)));
+    const del=document.createElement('button');
+    del.className='del'; del.textContent='✕'; del.title='delete this alias';
+    del.onclick=()=>rule('unalias',a.match);
+    row.appendChild(del);
+    al.appendChild(row);
+  }
+
+  const hl=$('#hideList'); hl.textContent='';
+  if(!(rules.hidden||[]).length){
+    const d=document.createElement('div'); d.className='empty';
+    d.textContent='nothing hidden';
+    hl.appendChild(d);
+  }
+  for(const h of rules.hidden||[]){
+    const row=document.createElement('div'); row.className='cols';
+    row.appendChild(ruleInput(h.match,'IP, CIDR or name',v=>{
+      rule('unhide',h.match).then(()=>rule('hide',v));
+    }));
+    const del=document.createElement('button');
+    del.className='del'; del.textContent='✕'; del.title='stop hiding this';
+    del.onclick=()=>rule('unhide',h.match);
+    row.appendChild(del);
+    hl.appendChild(row);
+  }
+
+  // Excluded owners. Each keeps an on/off switch beside the delete, so a
+  // rule can be parked for a moment without retyping the name later.
+  const el=$('#exclList'); el.textContent='';
+  const excl=rules.excluded||[];
+  if(!excl.length){
+    const d=document.createElement('div'); d.className='empty';
+    d.textContent='none — click an owner below, or right-click one in the table';
+    el.appendChild(d);
+  }
+  for(const e of excl){
+    const row=document.createElement('div'); row.className='cols'+(e.off?' off':'');
+    row.appendChild(ruleInput(e.match,'organisation name',v=>{
+      rule('unexclude',e.match).then(()=>rule('exclude',v));
+    }));
+    const btns=document.createElement('div'); btns.className='rowbtns';
+    const pwr=document.createElement('button');
+    pwr.className='pwr'+(e.off?'':' on');
+    pwr.textContent=e.off?'off':'on';
+    pwr.title=e.off?'switch this exclusion back on':'park this exclusion without deleting it';
+    pwr.onclick=()=>rule(e.off?'exclude-on':'exclude-off',e.match);
+    btns.appendChild(pwr);
+    const del=document.createElement('button');
+    del.className='del'; del.textContent='✕'; del.title='delete this exclusion';
+    del.onclick=()=>rule('unexclude',e.match);
+    btns.appendChild(del);
+    row.appendChild(btns);
+    el.appendChild(row);
+  }
+
+  // Owners present in the current snapshot: the fast path to building the
+  // list, since typing an organisation's exact name from memory is the
+  // reason people give up and use the filter box instead.
+  const seen=new Map();
+  for(const c of (snap&&snap.conns)||[]){
+    for(const o of [c.owner,c.lowner]) if(o) seen.set(o.toLowerCase(),o);
+  }
+  const os=$('#ownerSeen'); os.textContent='';
+  const names=[...seen.values()].sort((a,b)=>a.localeCompare(b));
+  if(!names.length){
+    const d=document.createElement('div'); d.className='empty';
+    d.textContent=(snap&&snap.owner)?'no owners resolved yet':'turn the owner toggle on to see any';
+    os.appendChild(d);
+  }
+  for(const n of names){
+    const b=document.createElement('button');
+    b.textContent=n;
+    const already=excl.some(e=>e.match.toLowerCase()===n.toLowerCase());
+    b.disabled=already;
+    b.title=already?'already excluded':'exclude everything owned by '+n;
+    b.onclick=()=>rule('exclude',n);
+    os.appendChild(b);
+  }
+}
+
+function addAlias(){
+  const m=$('#aliasM'), n=$('#aliasN');
+  const mv=m.value.trim(), nv=n.value.trim();
+  m.classList.toggle('bad',!mv); n.classList.toggle('bad',!nv);
+  if(!mv||!nv)return;
+  rule('alias',mv,nv).then(()=>{m.value='';n.value='';m.focus();});
+}
+function addHide(){
+  const m=$('#hideM'); const mv=m.value.trim();
+  m.classList.toggle('bad',!mv);
+  if(!mv)return;
+  rule('hide',mv).then(()=>{m.value='';m.focus();});
+}
+function addExcl(){
+  const m=$('#exclM'); const mv=m.value.trim();
+  m.classList.toggle('bad',!mv);
+  if(!mv)return;
+  rule('exclude',mv).then(()=>{m.value='';m.focus();});
+}
+$('#aliasAddBtn').onclick=addAlias;
+$('#hideAddBtn').onclick=addHide;
+$('#exclAddBtn').onclick=addExcl;
+for(const [id,fn] of [['#aliasM',addAlias],['#aliasN',addAlias],['#hideM',addHide],['#exclM',addExcl]])
+  $(id).onkeydown=e=>{ e.stopPropagation(); if(e.key==='Enter')fn(); };
+
+// ---- panel tabs ----
+function setPanelTab(t){
+  document.querySelectorAll('#ptabs button')
+    .forEach(b=>b.classList.toggle('on',b.dataset.t===t));
+  document.querySelectorAll('#panel section[data-tab]')
+    .forEach(s=>s.classList.toggle('show',s.dataset.tab===t));
+  localStorage.setItem('porthawk.ptab',t);
+}
+$('#ptabs').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  setPanelTab(b.dataset.t);
+};
+setPanelTab(localStorage.getItem('porthawk.ptab')||'names');
+
+// Split the filter box into terms: {neg, text}. A term is a quoted run
+// ("..." or '...') or a run of non-space chars, either optionally prefixed
+// with '-'. Quoting is what makes multi-word owner names ("Google LLC")
+// usable at all — unquoted they'd become two independent terms.
+function filterTerms(s){
+  const out=[];
+  for(let i=0;i<s.length;){
+    if(/\s/.test(s[i])){i++;continue;}
+    let neg=false;
+    if(s[i]==='-'){neg=true;i++;}
+    let text;
+    if(s[i]==='"'||s[i]==="'"){
+      const q=s[i++], end=s.indexOf(q,i);
+      // unterminated quote: take the rest, so the list doesn't go blank
+      // while the closing quote is still being typed
+      text=end<0?s.slice(i):s.slice(i,end);
+      i=end<0?s.length:end+1;
+    } else {
+      let j=i; while(j<s.length&&!/\s/.test(s[j]))j++;
+      text=s.slice(i,j); i=j;
+    }
+    if(text)out.push({neg,text});
+  }
+  return out;
+}
+
+function addFilterTerm(t){
+  const cur=$('#filter').value.trim();
+  const neg=t[0]==='-', text=neg?t.slice(1):t;
+  if(filterTerms(cur).some(x=>x.neg===neg&&x.text===text))return;
+  const q=/\s/.test(text)?(neg?'-"':'"')+text+'"':t;
+  $('#filter').value=(cur?cur+' ':'')+q;
+  filter=$('#filter').value; render();
+}
+
+// Filter grammar: space-separated terms, all of which must match; a term
+// prefixed with '-' must not. A term may be quoted ("google llc") to match
+// a phrase containing spaces. Everything is a plain substring match over
+// the row's text.
+function matchFilter(hay){
+  for(const t of filterTerms(filter.toLowerCase())){
+    if(t.neg){ if(hay.includes(t.text))return false; }
+    else if(!hay.includes(t.text))return false;
+  }
+  return true;
+}
+
+// ---- traffic arithmetic ----
+// One rule for the whole table: a number is the sum of the connection
+// rows underneath it. Rows come from per-socket kernel counters (tcp_info
+// for TCP, eBPF for UDP), so they are all the same unit and they add.
+const NUMS=['downRate','upRate','down','up'];
+function sumConns(list){
+  const o={};
+  for(const k of NUMS) o[k]=0;
+  for(const c of list) for(const k of NUMS) o[k]+=(+c[k]||0);
+  return o;
+}
+const connTotals=conns=>sumConns(conns||[]);
+
+// The packet-capture number (nethogs) counts wire bytes: payload plus
+// TCP/IP headers plus retransmits, across every protocol. Per-socket
+// counters count payload. Neither is wrong and neither can be converted
+// into the other, so the difference is stated rather than split.
+function wireNote(own,wire,dir){
+  own=+own||0; wire=+wire||0;
+  if(own<=0&&wire<=0)return'';
+  let s=fmtRate(own)+' KB/s '+dir+', summed from the connections below (payload bytes)';
+  if(wire>0) s+='\n'+fmtRate(wire)+' KB/s measured at the wire by packet capture'
+    +' — the difference is packet headers and retransmits, which belong to no'
+    +' single socket';
+  return s;
 }
 
 // ---- render ----
 function render(){
   if(!snap)return;
   const now=Date.now();
-  // totals
-  $('#tDnR').textContent=fmtRate(snap.totals.downRate)+' KB/s';
-  $('#tUpR').textContent=fmtRate(snap.totals.upRate)+' KB/s';
-  $('#tDnT').textContent=fmtTot(snap.totals.down)||'0 KB';
-  $('#tUpT').textContent=fmtTot(snap.totals.up)||'0 KB';
+  // Totals are the sum of the connection rows, not the packet-capture
+  // figure, so that every level of the table reconciles: row -> group
+  // header -> total. The capture number measures something else (wire
+  // bytes rather than payload) and is kept as a labelled second opinion
+  // in the tooltip rather than mixed into the same column.
+  const ct=connTotals(snap.conns);
+  $('#tDnR').textContent=fmtRate(ct.downRate)+' KB/s';
+  $('#tUpR').textContent=fmtRate(ct.upRate)+' KB/s';
+  $('#tDnT').textContent=fmtTot(ct.down)||'0 KB';
+  $('#tUpT').textContent=fmtTot(ct.up)||'0 KB';
+  $('#tDnR').parentElement.title=wireNote(ct.downRate,snap.totals.downRate,'down');
+  $('#tUpR').parentElement.title=wireNote(ct.upRate,snap.totals.upRate,'up');
   $('#clock').textContent=new Date(snap.t).toLocaleTimeString();
 
   const live=new Set();
@@ -372,22 +1241,42 @@ function render(){
   }
 
   // filter + view
-  const f=filter.toLowerCase();
   const vis=[];
+  let hidden=0;
   for(const r of rows.values()){
     const {c,v}=r.data;
     let ok=true;
-    if(!showLocal && (c.flag==='🏠'||c.flag==='🔁')) ok=false;   // LAN / loopback
-    if(ok && view==='listen') ok = v.state==='LISTEN'||v.state==='UNCONN';
-    else if(ok && view==='est') ok = v.state==='ESTABLISHED'||v.state==='DISCONNECTED';
-    if(ok&&f) ok=(v.comm+' '+v.pid+' '+v.user+' '+v.local+' '+v.remote+' '
-                  +v.host+' '+v.cc+' '+v.proto+' '+v.state).toLowerCase().includes(f);
+    // hide LAN / loopback rows unless 'local' toggle is on
+    if(!showLocal && (c.flag==='🏠'||c.flag==='🔁')) ok=false;
+    // Listening covers TCP LISTEN and the UDP equivalent (UNCONN, a bound
+    // socket with no peer). The other state is everything that isn't
+    // listening — not just ESTABLISHED, so half-open and closing sockets
+    // stay visible instead of falling through both views.
+    const listening = v.state==='LISTEN'||v.state==='UNCONN';
+    if(ok) ok = (view==='listen') ? listening : !listening;
+    // Minimum rate. Listening sockets are exempt: they are shown for what
+    // they are, not for what they are moving, and a floor would empty the
+    // Listening view entirely.
+    if(ok && minRate>0 && !listening)
+      ok = (+v.downRate||0) >= minRate || (+v.upRate||0) >= minRate;
+    // saved hide rules: counted even when suppressed, so the bar can say
+    // how much of the picture you're not being shown
+    if(ok && c.hide){ hidden++; if(applyHide) ok=false; }
+    if(ok&&filter) ok=matchFilter(
+      (v.comm+' '+v.app+' '+v.pid+' '+v.user+' '+v.local+' '+v.remote+' '+v.ip+' '
+       +v.host+' '+v.owner+' '+v.alias+' '+v.lhost+' '+v.lowner+' '+v.lalias+' '+v.iface+' '+v.liface+' '+v.cc+' '+regionName(v.cc)+' '
+       +v.proto+' '+v.state).toLowerCase());
     if(ok)vis.push(r);
   }
+  const hb=$('#hidbox');
+  hb.hidden=hidden===0;
+  hb.textContent=applyHide?(hidden+' hidden'):(hidden+' hidden — showing');
+  hb.classList.toggle('off',!applyHide);
+  hb.title=applyHide?'rows matching your hide rules — click to reveal them'
+                    :'hide rules are off — click to apply them again';
   $('#tCnt').textContent=vis.length;
   $('#empty').hidden=vis.length>0;
 
-  const NUMS=['downRate','upRate','down','up'];
   const numeric=sortK==='pid'||NUMS.includes(sortK);
   const rcmp=(a,b)=>{
     let x=a.data.v[sortK], y=b.data.v[sortK];
@@ -403,42 +1292,66 @@ function render(){
       listenSet.add(r.data.c.proto.slice(0,3)+r.data.c.lp);
   }
 
-  // bucket by PID
+  // bucket by app (all of an app's helper PIDs collapse into one group);
+  // fall back to pid|comm when there's no recognizable app name
   const groups=new Map();
   for(const r of vis){
-    const key=r.data.c.pid+'|'+r.data.v.comm;
+    const c=r.data.c, v=r.data.v;
+    const key=c.app?('app|'+c.app):(c.pid+'|'+v.comm);
     let g=groups.get(key);
-    if(!g){g={key,pid:r.data.c.pid,comm:r.data.v.comm,user:r.data.v.user,
-             uid:r.data.c.uid,rows:[],out:0,inn:0,lis:0,protos:new Set()};
+    if(!g){g={key,app:c.app||'',pids:new Set(),comm:v.comm,user:v.user,
+             uid:c.uid,rows:[],out:0,inn:0,lis:0,protos:new Set()};
       groups.set(key,g);}
+    g.pids.add(c.pid);
     g.rows.push(r);
-    g.protos.add(r.data.c.proto.slice(0,3));
-    const v=r.data.v;
+    g.protos.add(c.proto.slice(0,3));
     if(v.state==='LISTEN'||v.state==='UNCONN') g.lis++;
-    else if(listenSet.has(r.data.c.proto.slice(0,3)+r.data.c.lp)) g.inn++;
+    else if(listenSet.has(c.proto.slice(0,3)+c.lp)) g.inn++;
     else g.out++;
   }
   const glist=[...groups.values()];
   for(const g of glist){
-    // header numbers: per-process (nethogs, includes UDP);
-    // fall back to sum of member connections
-    const ps=snap.procs[g.pid];
-    g.agg={};
-    for(const k of NUMS)
-      g.agg[k]=ps?ps[k]:g.rows.reduce((s,r)=>s+(+r.data.v[k]||0),0);
+    // header numbers: per-process (nethogs, includes UDP), summed across
+    // every PID in the app; fall back to sum of member connections
+    g.pid0=Math.min(...[...g.pids].filter(p=>p>0), Infinity);
+    // Header = exactly the rows under it. Previously this preferred the
+    // per-process packet-capture figure, which measures wire bytes while
+    // the rows measure payload — so the header never matched its own
+    // children and the table looked broken. The capture number is still
+    // shown, in the tooltip, labelled as what it is.
+    g.agg=sumConns(g.rows.map(r=>r.data.v));
+    g.wire={};
+    for(const k of NUMS){
+      let s=0;
+      for(const pid of g.pids){const ps=snap.procs[pid]; if(ps)s+=+ps[k]||0;}
+      g.wire[k]=s;
+    }
+    // A group of one renders as the bare connection row, not as a header,
+    // so it has to sort on the numbers it actually shows. Sorting it on
+    // g.agg floats a process whose per-process total dwarfs its one
+    // visible socket — an idle ssh session, say — to the top of a KB/s
+    // sort while displaying a blank cell.
+    // A group of one renders as the bare connection row rather than a
+    // header, and g.agg is that row's own numbers, so sorting is
+    // consistent either way.
+    g.sortv=g.agg;
     g.rows.sort(rcmp);
   }
   glist.sort((a,b)=>{
     let r;
-    if(NUMS.includes(sortK)) r=sortDir*cmp(a.agg[sortK],b.agg[sortK]);
-    else if(sortK==='pid') r=sortDir*cmp(a.pid,b.pid);
+    if(NUMS.includes(sortK)) r=sortDir*cmp(+a.sortv[sortK]||0,+b.sortv[sortK]||0);
+    else if(sortK==='pid') r=sortDir*cmp(a.pid0,b.pid0);
     else if(sortK==='user') r=sortDir*cmp(a.user,b.user);
-    else r=cmp(a.comm.toLowerCase(),b.comm.toLowerCase());
+    else r=cmp((a.app||a.comm).toLowerCase(),(b.app||b.comm).toLowerCase());
     return r||cmp(a.key,b.key);
   });
   const seq=[], liveKeys=new Set();
   for(const g of glist){
-    if(g.rows.length===1){ seq.push(g.rows[0].el); continue; } // lone conn: no group header
+    if(g.rows.length===1){ // lone conn: no group header
+      const r=g.rows[0];
+      if(g.app) setTxt(r.tds.comm,g.app); // still show the recognizable name
+      seq.push(r.el); continue;
+    }
     liveKeys.add(g.key);
     const open=expanded.has(g.key);
     seq.push(groupHeader(g,open));
@@ -456,6 +1369,9 @@ function render(){
   // freeze column widths once, after the session settles (DNS resolved),
   // so expand/collapse no longer reflows the table. Reload re-measures.
   if(!colsLocked && !lockScheduled && vis.length){ lockScheduled=true; setTimeout(lockColumns,2500); }
+  // keep the settings panel in step with rules edited elsewhere (another
+  // tab, or the file by hand); it's a no-op while the panel is closed
+  drawPanel();
   firstSnap=false;
 }
 const cmp=(a,b)=>a<b?-1:a>b?1:0;
@@ -474,6 +1390,16 @@ function lockColumns(){
   table.insertBefore(cg,table.firstChild);
   table.style.tableLayout='fixed';
   colsLocked=true;
+}
+
+// A group header's tooltip: the number shown is the sum of its rows, and
+// the packet-capture figure sits beside it as a second opinion.
+function rateBreakdown(g,k,dir){
+  let s=wireNote(g.agg[k],g.wire[k],dir==='in'?'down':'up');
+  if(s&&snap&&!snap.udpAcct)
+    s+='\nUDP/QUIC has no per-socket counters on this machine, so any UDP'
+      +' traffic is missing from the first number — see settings.';
+  return s;
 }
 
 // Cached header rows with the exact same column grid as connection
@@ -513,8 +1439,9 @@ function groupHeader(g,open){
     h={el:tr,tds}; ghdrs.set(key,h);
   }
   const t=h.tds;
-  setTxt(t.comm,(open?'▾ ':'▸ ')+g.comm);
-  setTxt(t.pid,g.pid<0?'?':String(g.pid));
+  setTxt(t.comm,(open?'▾ ':'▸ ')+(g.app||g.comm));
+  const only=g.pids.size===1?[...g.pids][0]:null;
+  setTxt(t.pid,g.pids.size>1?(g.pids.size+' pids'):(only>0?String(only):'?'));
   setTxt(t.user,g.user);
   setTxt(t.proto,[...g.protos].sort().join(' '));
   const parts=[];
@@ -524,8 +1451,11 @@ function groupHeader(g,open){
   setTxt(t.conns,parts.join(' · ')||'—');
   rate(t.dr,g.agg.downRate); rate(t.ur,g.agg.upRate);
   setTxt(t.down,fmtTot(g.agg.down)); setTxt(t.up,fmtTot(g.agg.up));
-  // kill button: whole process, own UID only
-  const mine=snap && g.uid===snap.me && g.pid>1;
+  t.dr.title=rateBreakdown(g,'downRate','in');
+  t.ur.title=rateBreakdown(g,'upRate','out');
+  // kill button: single-PID groups only, own UID (killing a multi-PID app
+  // group at once is ambiguous — expand it and kill members individually)
+  const mine=snap && g.uid===snap.me && only>1;
   if(!mine){ t.kill.textContent=''; }
   else{
     let b=t.kill.firstChild;
@@ -535,43 +1465,76 @@ function groupHeader(g,open){
       b.onclick=e=>{e.stopPropagation();doKill(b);};
       t.kill.appendChild(b);
     }
-    b.dataset.pid=g.pid;
+    b.dataset.pid=only;
+    b.dataset.label=g.app||g.comm||'this process';
   }
   return h.el;
 }
 
 // Reconcile tbody to the desired sequence with minimal DOM movement:
 // re-appending unchanged rows restarts animations and forces layout.
+// Emptying tbody also collapses #wrap's scroll height, so the browser
+// clamps scrollTop to 0 — that jump is what reads as "the table
+// refreshed" on every expand/collapse. So: walk the wanted order and
+// touch only the rows that are actually out of place.
 function applySeq(seq){
   const want=new Set(seq);
   for(const el of [...tb.children])if(!want.has(el))el.remove();
-  let same=tb.children.length===seq.length;
-  if(same)for(let i=0;i<seq.length;i++)if(tb.children[i]!==seq[i]){same=false;break;}
-  if(!same){
-    const frag=document.createDocumentFragment();
-    for(const el of seq)frag.appendChild(el);
-    tb.appendChild(frag);
+  let cur=tb.firstElementChild;
+  for(const el of seq){
+    if(cur===el){ cur=cur.nextElementSibling; continue; }
+    tb.insertBefore(el,cur);   // moves el if it's already in the table
   }
 }
 
 // ---- controls ----
 $('#filter').oninput=e=>{filter=e.target.value;render();};
+// One button, two states: established connections, or listening ports.
 $('#tabs').onclick=e=>{
-  const b=e.target.closest('button'); if(!b)return;
-  view=b.dataset.v;
-  document.querySelectorAll('#tabs button').forEach(x=>x.classList.toggle('on',x===b));
+  if(!e.target.closest('button'))return;
+  setView(view==='est'?'listen':'est');
   render();
 };
-$('#dns').onclick=e=>{
-  const want=!e.target.classList.contains('on');
-  fetch('/api/dns',{method:'POST',headers:{'Content-Type':'application/json'},
+function setView(v){
+  view=v;
+  const b=$('#viewBtn');
+  b.dataset.v=v;
+  b.textContent=v==='listen'?'Listening':'Established';
+  localStorage.setItem('porthawk.view',v);
+}
+setView(localStorage.getItem('porthawk.view')==='listen'?'listen':'est');
+// Server-side toggles: the button state comes from the snapshot, but
+// waiting for the next one (up to a tick, then up to a display refresh)
+// makes the click feel broken. Apply it locally and repaint at once; the
+// next snapshot confirms the same value.
+function serverToggle(btn,url,key){
+  const want=!btn.classList.contains('on');
+  fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},
     body:JSON.stringify({enabled:want})})
-    .then(res=>{if(res.ok)e.target.classList.toggle('on',want);});
+    .then(res=>{
+      if(!res.ok)return;
+      btn.classList.toggle('on',want);
+      if(snap){snap[key]=want; render();}
+    });
+}
+$('#dns').onclick=e=>serverToggle(e.target,'/api/dns','dns');
+$('#owner').onclick=e=>serverToggle(e.target,'/api/owner','owner');
+$('#alias').onclick=e=>{
+  useAlias=!useAlias;
+  e.target.classList.toggle('on',useAlias);
+  localStorage.setItem('porthawk.alias',useAlias?'1':'0');
+  render();
+};
+$('#hidbox').onclick=()=>{
+  applyHide=!applyHide;
+  localStorage.setItem('porthawk.hide',applyHide?'1':'0');
+  render();
 };
 $('#pause').onclick=e=>{
   paused=!paused;e.target.classList.toggle('on',paused);
   e.target.textContent=paused?'resume':'pause';
-  if(!paused)render();
+  // resuming catches up in one paint; pausing keeps whatever is on screen
+  if(!paused){ snap=latest||snap; render(); }
 };
 $('#local').onclick=e=>{
   showLocal=!showLocal;
@@ -592,6 +1555,63 @@ $('#hdr').onclick=e=>{
 // local toggle (persisted; default hidden)
 showLocal=localStorage.getItem('porthawk.local')==='1';
 $('#local').classList.toggle('on',showLocal);
+
+// alias display + hide-rule enforcement (persisted; both default on)
+useAlias=localStorage.getItem('porthawk.alias')!=='0';
+$('#alias').classList.toggle('on',useAlias);
+applyHide=localStorage.getItem('porthawk.hide')!=='0';
+
+// minimum rate a row must be moving to be listed (persisted; 0 = off)
+function applyMinRate(v,fromInput){
+  minRate=Math.max(0,+v||0);
+  if(!fromInput)$('#minRate').value=minRate;
+  document.querySelectorAll('#minRateQuick button')
+    .forEach(b=>b.classList.toggle('on',+b.dataset.r===minRate));
+  localStorage.setItem('porthawk.minrate',minRate);
+  render();
+}
+$('#minRate').oninput=e=>applyMinRate(e.target.value,true);
+$('#minRate').onkeydown=e=>e.stopPropagation(); // space must not toggle pause
+$('#minRateQuick').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  applyMinRate(b.dataset.r);
+};
+applyMinRate(+localStorage.getItem('porthawk.minrate')||0);
+
+// rate-bar colour scale (persisted; default on)
+function applyBarScale(v){
+  barScale=v;
+  $('#barScale').classList.toggle('on',barScale);
+  $('#barScale').textContent=barScale?'scaled colour':'fixed colour';
+  const lg=$('#barLegend'); lg.textContent='';
+  if(barScale){
+    for(const k of [0.5,5,50,500,5000]){
+      const i=document.createElement('i');
+      i.style.background=barColor(k);
+      i.title=fmtRate(k)+' KB/s';
+      lg.appendChild(i);
+    }
+  }
+  localStorage.setItem('porthawk.barscale',barScale?'1':'0');
+  render();
+}
+$('#barScale').onclick=()=>applyBarScale(!barScale);
+applyBarScale(localStorage.getItem('porthawk.barscale')!=='0');
+
+// confirm-before-kill (persisted; default on — the safe default is the
+// one where a misclick costs a dialog rather than a process)
+function applyConfirmKill(v){
+  confirmKill=v;
+  const b=$('#confirmKill');
+  b.classList.toggle('on',confirmKill);
+  b.textContent=confirmKill?'confirm kills':'kill without asking';
+  b.title=confirmKill
+    ? 'every signal asks first'
+    : 'signals are sent immediately — nothing will ask';
+  localStorage.setItem('porthawk.confirmkill',confirmKill?'1':'0');
+}
+$('#confirmKill').onclick=()=>applyConfirmKill(!confirmKill);
+applyConfirmKill(localStorage.getItem('porthawk.confirmkill')!=='0');
 
 // refresh-rate input (persisted)
 const savedRate=+localStorage.getItem('porthawk.refresh')||2;

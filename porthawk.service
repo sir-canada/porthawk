@@ -22,7 +22,7 @@
 # Install (one sudo, for setcap only):  make install
 
 [Unit]
-Description=porthawk - per-process connection monitor (web UI on 127.0.0.1:7413)
+Description=porthawk - per-process connection monitor (web UI on loopback, random port)
 After=network.target
 
 [Service]

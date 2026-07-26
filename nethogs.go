@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"log"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 // monitoring start (nethogs -v1); rates derived from refresh deltas.
 type ProcStat struct {
 	Name     string  `json:"name"`
+	App      string  `json:"app"`
 	SentKB   float64 `json:"up"`
 	RecvKB   float64 `json:"down"`
 	SentRate float64 `json:"upRate"`   // KB/s
@@ -152,7 +154,9 @@ func (h *Hogs) commit() {
 	for pid, p := range h.procs {
 		if !seen[pid] {
 			p.SentRate, p.RecvRate = 0, 0
-			if now.Sub(p.lastSeen) > 60*time.Second && p.SentKB == 0 && p.RecvKB == 0 {
+			if _, err := os.Stat("/proc/" + strconv.Itoa(pid)); err != nil {
+				delete(h.procs, pid) // process gone from system
+			} else if now.Sub(p.lastSeen) > 60*time.Second && p.SentKB == 0 && p.RecvKB == 0 {
 				delete(h.procs, pid)
 			}
 		}
