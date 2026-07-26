@@ -269,6 +269,10 @@ tr.hid:hover td{opacity:.8}
 .copyable{cursor:pointer}
 tbody td.copyable:hover{color:var(--acc)}
 td.copyable.copied{color:var(--ok)}
+/* Every cell that isn't an address, a PID or the kill button copies the
+   whole row line, so it is a click target too. */
+tbody tr:not(.grp) td:not(.copyable):not(.pid):not(.kill){cursor:pointer}
+td.copied{color:var(--ok)}
 /* "Copied X" bubble, anchored to whatever was copied. Opacity transition
    rather than an animation, same reason as the row flash. */
 #copied{
@@ -706,6 +710,35 @@ function showCopied(text,el){
   copyBubT=setTimeout(()=>copyBub.classList.remove('show'),1400);
 }
 
+// "Blank space" on a row is everything the eye reads as data but that has
+// no action of its own. Two lists because they differ: the process name
+// has a right-click menu but no left-click, so it copies the row on the
+// left and opens its own menu on the right.
+const hasCls=(td,...cls)=>cls.some(c=>td.classList.contains(c));
+const hasOwnClick=td=>hasCls(td,'pid','local','remote','kill');
+const hasOwnMenu =td=>hasCls(td,'comm','pid','local','remote');
+function blankCell(e,own){
+  const td=e.target.closest('td');
+  if(!td||own(td))return null;
+  // A drag-select means the user is after the text, not the row.
+  const sel=window.getSelection&&String(window.getSelection());
+  if(sel&&sel.trim())return null;
+  return td;
+}
+// The whole row as one tab-separated line — same string as Ctrl-Shift-C.
+function copyRowAll(id,at){
+  const r=rows.get(id);
+  if(r&&r.data)copyText(rowLine(r),at);
+}
+// Right-click away from an address: the row itself is the subject, and the
+// only thing to do with a row as a whole is take a copy of it.
+function openRowMenu(e,id,at){
+  const r=rows.get(id); if(!r||!r.data)return;
+  const v=r.data.v;
+  showMenu(e,[{label:'copy all (whole row)',fn:()=>copyRowAll(id,at)}],
+    [v.comm||'?', v.pid||'', v.state].filter(Boolean).join('  ·  '));
+}
+
 function makeRow(c){
   const tr=document.createElement('tr');
   tr._id=c.id;
@@ -738,7 +771,19 @@ function makeRow(c){
   tr.appendChild(kc); tds._kill=kc;
   // Clicking a row moves the keyboard cursor there, so mouse and keyboard
   // never disagree about where you are. Cell handlers run first and bubble.
-  tr.addEventListener('click',()=>setCur(tr,false));
+  // Landing anywhere without its own action — state, user, proto, the
+  // numbers, the process name, the gaps between them — also copies the
+  // whole row line, the same string Ctrl-Shift-C yields.
+  tr.addEventListener('click',e=>{
+    setCur(tr,false);
+    const td=blankCell(e,hasOwnClick); if(!td)return;
+    copyRowAll(tr._id,td);
+  });
+  tr.addEventListener('contextmenu',e=>{
+    const td=blankCell(e,hasOwnMenu); if(!td)return; // comm/pid/local/remote: own menus
+    e.preventDefault();
+    openRowMenu(e,tr._id,td);
+  });
   return {el:tr, tds, data:null, deadAt:0};
 }
 
@@ -898,7 +943,9 @@ function elevated(url,body,what){
 function openProcMenu(e,id){
   const r=rows.get(id); if(!r)return;
   const c=r.data.c, v=r.data.v;
-  if(c.pid<0){ return; } // unattributed row: nothing to act on
+  // Unattributed row: no process to act on, but the row is still worth
+  // copying — fall through to the plain row menu rather than nothing.
+  if(c.pid<0){ openRowMenu(e,id,e.target); return; }
   const label=c.app||v.comm||'?';
   const items=[];
   const add=(l,fn,cls)=>items.push({label:l,fn,cls});
@@ -910,6 +957,7 @@ function openProcMenu(e,id){
   add('copy name "'+label+'"', ()=>copyText(label,at));
   if(v.comm&&v.comm!==label)
     add('copy command "'+v.comm+'"', ()=>copyText(v.comm,at));
+  add('copy all (whole row)', ()=>copyRowAll(id,at));
   items.push({sep:true});
 
   const mine=snap&&c.uid===snap.me;
@@ -1584,6 +1632,15 @@ function groupHeader(g,open){
       expanded.has(key)?expanded.delete(key):expanded.add(key);
       render();
     };
+    // A header's left click is taken by expand/collapse, so the summary
+    // line is on the right click instead. Read off the cells at click
+    // time: the header element is cached and repopulated every tick.
+    tr.oncontextmenu=e=>{
+      e.preventDefault();
+      const at=e.target.closest('td')||tr;
+      showMenu(e,[{label:'copy all (whole row)',fn:()=>copyText(grpLine(tds),at)}],
+        grpName(tds)+'  ·  group');
+    };
     h={el:tr,tds}; ghdrs.set(key,h);
   }
   // What Ctrl-C yields on a group header: the app/process name.
@@ -1678,6 +1735,17 @@ function rowLine(r){
   return [v.comm,v.pid,v.user,v.proto,v.state,v.local,v.remote,
     fmtRate(v.downRate),fmtRate(v.upRate),fmtTot(v.down),fmtTot(v.up)]
     .map(x=>String(x==null?'':x)).join('\t');
+}
+// Same shape for a group header, straight off its cells: a group has no
+// connection record behind it, only the aggregate on screen. The Local +
+// Remote pair is one merged cell there ("3 outgoing · 1 listening"), so
+// it fills both columns.
+const grpName=t=>t.comm.textContent.replace(/^[▾▸]\s*/,'');
+function grpLine(t){
+  return [grpName(t),t.pid.textContent,t.user.textContent,t.proto.textContent,
+    t.state.textContent,t.conns.textContent,'',
+    t.dr.lastChild.textContent,t.ur.lastChild.textContent,
+    t.down.textContent,t.up.textContent].join('\t');
 }
 
 function applySeq(seq){
