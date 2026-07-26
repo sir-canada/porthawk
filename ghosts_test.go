@@ -100,3 +100,40 @@ func TestClampGhostTTL(t *testing.T) {
 		}
 	}
 }
+
+// A process exits, its socket outlives it by a tick, and that unattributed
+// tick is what gets promoted to a ghost — so without carrying the name
+// across, every corpse is anonymous.
+func TestGhostKeepsNameOfExitedProcess(t *testing.T) {
+	g := NewGhosts(time.Minute)
+	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave", App: "Brave"}})
+
+	// Same socket, owner exited: kernel reports it with no pid.
+	out := g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: -1, NoPID: "gone"}})
+	if len(out) != 1 || out[0].Comm != "brave" || out[0].App != "Brave" {
+		t.Fatalf("name should survive the owner exiting, got %+v", out)
+	}
+	if out[0].PID != -1 {
+		t.Fatalf("PID must not be carried over, got %d", out[0].PID)
+	}
+
+	// And it is still there once the socket goes and the row is a ghost.
+	out = g.Track(nil)
+	if len(out) != 1 || out[0].State != "DISCONNECTED" || out[0].Comm != "brave" {
+		t.Fatalf("ghost should keep the name, got %+v", out)
+	}
+}
+
+// "gone" is the only reason that means "this socket had an owner and it
+// exited". The others are different questions, and an old label answers
+// none of them.
+func TestGhostDoesNotInventNames(t *testing.T) {
+	for _, reason := range []string{"denied", "noproc", "kernel", ""} {
+		g := NewGhosts(time.Minute)
+		g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave"}})
+		out := g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: -1, NoPID: reason}})
+		if len(out) != 1 || out[0].Comm != "" {
+			t.Fatalf("noPid=%q should not inherit a name, got %+v", reason, out)
+		}
+	}
+}

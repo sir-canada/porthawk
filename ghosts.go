@@ -75,6 +75,28 @@ func (g *Ghosts) Track(live []Conn) []Conn {
 	for _, c := range live {
 		liveIDs[c.ID] = true
 	}
+	// The kernel drops a socket's owner the moment the process exits, but
+	// the socket outlives it by a tick or more — and then the row is
+	// promoted to a ghost from that last, already-stripped copy. The result
+	// was that a connection kept its name right up until it died and then
+	// lost it, which is precisely backwards: the corpse is the row you most
+	// want a name on. So carry the name across from the previous tick.
+	//
+	// Only for "gone", which is the one reason that means "this socket had
+	// an owner and that owner exited" — an inode we were refused, one the
+	// kernel never gave an owner, and one that never had a name are all
+	// different questions, and none of them are answered by an old label.
+	// The PID is not carried: that number belongs to a process that is not
+	// there any more, and pasting it into kill(1) would be a lie.
+	for i := range live {
+		c := &live[i]
+		if c.Comm != "" || c.NoPID != "gone" {
+			continue
+		}
+		if p, ok := g.prev[c.ID]; ok && p.Comm != "" {
+			c.Comm, c.App = p.Comm, p.App
+		}
+	}
 	// Ghosting turned off: drop anything still held and keep the prev set
 	// current, so turning it back on starts diffing from this tick instead
 	// of resurrecting everything that died while it was off.

@@ -62,6 +62,8 @@ type Conn struct {
 	//   "noproc" the kernel keeps no process for this socket (TIME_WAIT and
 	//            friends are inet_timewait_sock: no fd, no inode, no owner)
 	//   "denied" the owning process exists but we cannot read its fds
+	//   "kernel" a kernel-internal socket: it has an inode, but no process
+	//            holds it and none ever will (see kernelUnowned)
 	//   "gone"   it exited between the /proc walk and this scan
 	NoPID string `json:"noPid,omitempty"`
 }
@@ -92,7 +94,21 @@ type Scanner struct {
 	// owner" and "we are not allowed to see the owner".
 	blocked int
 	warned  bool
+	// unowned remembers, per socket inode, when we first saw a socket that
+	// has an inode but that no /proc/<pid>/fd points at. See kernelUnowned.
+	unowned map[uint64]time.Time
 }
+
+// How long a socket must keep an inode that no process holds before we stop
+// calling it a race and call it kernel-owned. A process exiting between the
+// /proc walk and the scan leaves such a socket for a tick or two; the socket
+// dies with it. A kernel-internal socket — NFS's lockd publishes four of
+// them, nlockmgr over tcp and udp, v4 and v6 — keeps its inode for the
+// lifetime of the mount with no userspace owner at any point, so without
+// this it is reported as "just exited" on every tick forever. That is not a
+// cosmetic wrong label: those permanent rows drowned the real exit races in
+// the counts (720 of 782 in one 180-snapshot sample).
+const kernelUnowned = 10 * time.Second
 
 // Blocked reports how many processes were unreadable in the last /proc
 // walk. Zero means every socket that has an owner could be attributed.
@@ -105,6 +121,7 @@ func (s *Scanner) Blocked() int {
 func NewScanner() *Scanner {
 	return &Scanner{
 		inodePID:  make(map[uint64]int),
+		unowned:   make(map[uint64]time.Time),
 		commCache: make(map[int]string),
 		appCache:  make(map[int]string),
 		userCache: make(map[uint32]string),
@@ -149,10 +166,13 @@ func (s *Scanner) Scan() []Conn {
 	defer s.mu.Unlock()
 
 	// Walk /proc if any inode is unknown, or periodically to evict stale.
+	// A socket already established as kernel-owned is not "unknown": it will
+	// never be in the map, and treating it as a reason to walk means a full
+	// /proc sweep on every single tick for as long as it exists.
 	missing := false
 	for _, r := range raws {
 		if r.inode != 0 {
-			if _, ok := s.inodePID[r.inode]; !ok {
+			if _, ok := s.inodePID[r.inode]; !ok && !s.kernelOwned(r.inode, time.Now()) {
 				missing = true
 				break
 			}
@@ -160,6 +180,30 @@ func (s *Scanner) Scan() []Conn {
 	}
 	if missing || time.Since(s.lastWalk) > 30*time.Second {
 		s.walkProc()
+	}
+
+	// Age every socket that has an inode no process holds. Done after the
+	// walk, so the map it is compared against is the current one, and in one
+	// pass over the whole scan, so inodes that have gone away are dropped
+	// rather than accumulating for the life of the process.
+	now := time.Now()
+	live := make(map[uint64]bool, len(raws))
+	for _, r := range raws {
+		if r.inode == 0 {
+			continue
+		}
+		if _, owned := s.inodePID[r.inode]; owned {
+			continue
+		}
+		live[r.inode] = true
+		if _, ok := s.unowned[r.inode]; !ok {
+			s.unowned[r.inode] = now
+		}
+	}
+	for ino := range s.unowned {
+		if !live[ino] {
+			delete(s.unowned, ino)
+		}
 	}
 
 	conns := make([]Conn, 0, len(raws))
@@ -191,18 +235,37 @@ func (s *Scanner) Scan() []Conn {
 			// No inode at all: the kernel is not holding a socket with an
 			// owner here. Nothing is wrong and nothing can be attributed.
 			c.NoPID = "noproc"
-		} else if s.blocked > 0 {
-			// There is an owner; we were refused somewhere in this walk, so
-			// the overwhelmingly likely reason is that it was this one.
-			c.NoPID = "denied"
 		} else {
-			c.NoPID = "gone"
+			c.NoPID = s.unownedReason(r.inode, now)
 		}
 		c.CC, c.Flag = geoLookup(ra)
 		c.ID = fmt.Sprintf("%s|%s:%d|%s:%d", c.Proto, c.LAddr, c.LPort, c.RAddr, c.RPort)
 		conns = append(conns, c)
 	}
 	return conns
+}
+
+// unownedReason explains a socket that has an inode which no fd points at.
+// Caller holds the lock.
+func (s *Scanner) unownedReason(inode uint64, now time.Time) string {
+	if s.blocked > 0 {
+		// There is an owner; we were refused somewhere in this walk, so the
+		// overwhelmingly likely reason is that it was this one. Said before
+		// the age test, because a socket we are not allowed to see the owner
+		// of looks exactly like one that has none.
+		return "denied"
+	}
+	if s.kernelOwned(inode, now) {
+		return "kernel"
+	}
+	return "gone"
+}
+
+// kernelOwned reports whether this inode has gone unowned for long enough
+// that no exiting process can explain it. Caller holds the lock.
+func (s *Scanner) kernelOwned(inode uint64, now time.Time) bool {
+	first, ok := s.unowned[inode]
+	return ok && now.Sub(first) >= kernelUnowned
 }
 
 // walkProc rebuilds the socket-inode -> pid map. Needs

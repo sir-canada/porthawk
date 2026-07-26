@@ -81,17 +81,31 @@ body{
 #wsdot.on{background:var(--ok); box-shadow:0 0 5px var(--ok)}
 /* ---- table ---- */
 #wrap{flex:1; overflow:auto}
-table{border-collapse:collapse; width:100%; white-space:nowrap}
+/* Columns are shares of the table, not fixed pixels (see applyCols), so a
+   narrower window squeezes them instead of growing a sideways scrollbar.
+   The floor is where squeezing stops helping and scrolling is the lesser
+   evil. Anything that no longer fits its column ends in an ellipsis. */
+table{border-collapse:collapse; width:100%; min-width:620px; white-space:nowrap}
 thead th{
   position:sticky; top:0; z-index:2; background:var(--bg2);
   border-bottom:1px solid var(--line2); padding:5px 10px;
   text-align:left; color:var(--dim); font-weight:500; cursor:pointer;
   user-select:none; transition:color .12s;
+  overflow:hidden; text-overflow:ellipsis;
 }
 thead th:hover{color:var(--fg)}
 thead th.num{text-align:right}
 thead th .arr{color:var(--acc); font-size:9px; margin-left:3px}
-tbody td{padding:2px 10px; border-bottom:1px solid var(--line)}
+/* Grab handle on a header's trailing edge. Sits inside the cell because
+   the header clips its overflow for the ellipsis. */
+th .rz{
+  position:absolute; top:0; right:0; width:7px; height:100%;
+  cursor:col-resize; z-index:3;
+}
+th .rz:hover{background:var(--acc); opacity:.55}
+body.resizing{cursor:col-resize; user-select:none}
+tbody td{padding:2px 10px; border-bottom:1px solid var(--line);
+  overflow:hidden; text-overflow:ellipsis}
 tbody td.num{text-align:right; font-variant-numeric:tabular-nums}
 /* flash = static class + fade-out transition, never CSS animation:
    animations replay every time sorting re-inserts the row */
@@ -111,7 +125,8 @@ tr.grp td.comm{color:var(--acc)}
 tr.grp .garr{color:var(--dim); font-size:10px; text-align:center}
 tr.grp td.gconns{color:var(--dim)}
 td.flag{font-size:14px; padding-right:2px}
-td.comm{color:var(--fg); max-width:180px; overflow:hidden; text-overflow:ellipsis}
+/* no max-width: the column's share decides, and it is draggable */
+td.comm{color:var(--fg)}
 td.pid{color:var(--dim); cursor:pointer; position:relative}
 td.pid:hover{color:var(--acc)}
 td.pid.copied{color:var(--ok)}
@@ -461,6 +476,15 @@ tr:hover .kbtn{opacity:.7}
       <span class="mono">Space</span> pause · <span class="mono">Esc</span>
       drop the highlight
     </div>
+    <h3>Mouse</h3>
+    <div class="hint">
+      Click a row anywhere that isn't an address or a PID to copy the whole
+      line; right-click there for the same as a menu item.<br>
+      Drag the right-hand edge of a column heading to set how much of the
+      table that column gets — the columns keep those proportions as the
+      window changes size. Double-click an edge to go back to automatic
+      widths.
+    </div>
     <div class="hint" id="attrHint" hidden></div>
     <div class="hint" id="hogsHint" hidden></div>
     <div class="hint" id="udpHint" hidden></div>
@@ -509,7 +533,9 @@ let showLocal=false;   // hide LAN / loopback by default
 let useAlias=true;     // show saved aliases in place of addresses
 let applyHide=true;    // honour saved hide rules
 let refreshMs=2000, refreshTimer=0;
-let colsLocked=false, lockScheduled=false;
+// Column widths: relative weights, one per COLS entry. Null until either
+// a saved set is read or the browser's auto layout is measured.
+let colsLocked=false, lockScheduled=false, colW=null;
 let sortK='down', sortDir=-1;   // default: ↓ Total, descending
 const rows=new Map();            // id -> {el, tds, data, deadAt}
 const expanded=new Set();        // group keys currently expanded
@@ -661,7 +687,13 @@ const NOPID={
   denied:'A process owns this socket, but porthawk was refused '+
          '/proc/<pid>/fd and cannot see which. Missing capabilities — see '+
          'Settings → About.',
-  gone:  'The owning process exited while this scan was running.',
+  kernel:'The kernel owns this socket itself — it has been held with no '+
+         'process behind it for as long as porthawk has been watching. NFS '+
+         'mounts publish several (nlockmgr). Nothing exited; there was '+
+         'never anything to exit.',
+  gone:  'The owning process exited while this scan was running. The name '+
+         'shown, if any, is the one this socket had on its last attributed '+
+         'tick — the PID is not carried over, because that process is gone.',
 };
 
 // One-shot flash: add class now, remove after the hold; the CSS
@@ -1570,20 +1602,103 @@ function render(){
 }
 const cmp=(a,b)=>a<b?-1:a>b?1:0;
 
+// ---- column widths ----
+// Widths are held as relative weights and written out as percentages, so
+// the table keeps its proportions at any window size: narrowing squeezes
+// every column instead of pushing the right-hand ones off the edge. The
+// first measurement is taken from the browser's own auto layout once the
+// session has settled (DNS resolved, names at full length), which is a
+// better starting point than any table of guesses. After that the widths
+// are the user's: drag a header edge to change one, and the pair either
+// side of that edge trade width so the total never changes.
+const COLW_KEY='porthawk.colw';
+const KILLW=2.6;                       // % reserved for the kill button column
+const MINW=0.02;                       // no column below 2% of the table
+const tableEl=()=>document.querySelector('table');
+function colGroup(){
+  const table=tableEl(); if(!table)return null;
+  let cg=table.querySelector(':scope > colgroup');
+  if(!cg){
+    cg=document.createElement('colgroup');
+    for(let i=0;i<=COLS.length;i++)cg.appendChild(document.createElement('col'));
+    table.insertBefore(cg,table.firstChild);
+  }
+  return cg;
+}
+function applyCols(){
+  const cg=colGroup(); if(!cg||!colW)return;
+  const total=colW.reduce((a,b)=>a+b,0)||1;
+  const scale=(100-KILLW)/total;
+  [...cg.children].forEach((col,i)=>{
+    col.style.width=(i<colW.length?(colW[i]*scale).toFixed(3):KILLW)+'%';
+  });
+  tableEl().style.tableLayout='fixed';
+}
+// Only ever measured while the table is still on auto layout; once fixed,
+// the numbers would just be the ones we wrote.
+function measureCols(){
+  const ths=[...document.querySelectorAll('#hdr th')].slice(0,COLS.length);
+  if(ths.length!==COLS.length)return false;
+  const w=ths.map(th=>th.getBoundingClientRect().width);
+  if(w.some(n=>!(n>0)))return false;
+  colW=w; return true;
+}
+function saveCols(){
+  if(colW)localStorage.setItem(COLW_KEY,JSON.stringify(colW.map(n=>+n.toFixed(3))));
+}
 function lockColumns(){
   if(colsLocked)return;
-  const ths=[...document.querySelectorAll('#hdr th')];
-  const table=document.querySelector('table');
-  if(!ths.length||!table)return;
-  const cg=document.createElement('colgroup');
-  for(const th of ths){
-    const col=document.createElement('col');
-    col.style.width=Math.ceil(th.getBoundingClientRect().width)+'px';
-    cg.appendChild(col);
-  }
-  table.insertBefore(cg,table.firstChild);
-  table.style.tableLayout='fixed';
+  if(!colW&&!measureCols())return;
+  applyCols();
   colsLocked=true;
+}
+// Back to the browser's own idea of the right widths, then re-measure it
+// as the new starting point.
+function resetCols(){
+  localStorage.removeItem(COLW_KEY);
+  colW=null; colsLocked=false;
+  const cg=colGroup();
+  if(cg)for(const col of cg.children)col.style.width='';
+  tableEl().style.tableLayout='auto';
+  setTimeout(lockColumns,60);          // after the auto layout has run
+}
+function startResize(e,i){
+  e.preventDefault(); e.stopPropagation();
+  if(!colW&&!measureCols())return;
+  applyCols(); colsLocked=true;        // dragging is the decision to fix them
+  const tw=tableEl().getBoundingClientRect().width||1;
+  const total=colW.reduce((a,b)=>a+b,0);
+  const perPx=total/tw;                // weight units per pixel of travel
+  const startX=e.clientX, a=colW[i], b=colW[i+1], floor=total*MINW;
+  document.body.classList.add('resizing');
+  const move=ev=>{
+    // Clamped so neither neighbour can be squeezed out of existence, and
+    // so the pair's combined width — and the table's — stays put.
+    const d=Math.max(floor-a,Math.min((ev.clientX-startX)*perPx,b-floor));
+    colW[i]=a+d; colW[i+1]=b-d;
+    applyCols();
+  };
+  const up=()=>{
+    removeEventListener('mousemove',move); removeEventListener('mouseup',up);
+    document.body.classList.remove('resizing');
+    saveCols();
+  };
+  addEventListener('mousemove',move); addEventListener('mouseup',up);
+}
+function addResizers(){
+  const ths=[...document.querySelectorAll('#hdr th')];
+  // One handle per boundary between two data columns. The last boundary
+  // is against the kill column, which is not the user's to resize.
+  for(let i=0;i<COLS.length-1;i++){
+    if(!ths[i])break;
+    const h=document.createElement('span');
+    h.className='rz';
+    h.title='drag to resize · double-click to reset every column';
+    h.onmousedown=ev=>startResize(ev,i);
+    h.onclick=ev=>ev.stopPropagation();          // a drag is not a sort
+    h.ondblclick=ev=>{ev.stopPropagation();resetCols();};
+    ths[i].appendChild(h);
+  }
 }
 
 // A group header's tooltip: the number shown is the sum of its rows, and
@@ -1995,6 +2110,18 @@ document.addEventListener('keydown',e=>{
     return;
   }
 });
+
+// Saved column widths are applied before the first frame, so a reload
+// doesn't visibly re-lay the table out; without them, the measurement
+// after the session settles supplies the first set.
+(()=>{
+  addResizers();
+  let a=null;
+  try{ a=JSON.parse(localStorage.getItem(COLW_KEY)||'null'); }catch(e){}
+  if(Array.isArray(a)&&a.length===COLS.length&&a.every(n=>typeof n==='number'&&n>0)){
+    colW=a; applyCols(); colsLocked=true;
+  }
+})();
 
 // show the default sort arrow on ↓ Total at load
 (()=>{
