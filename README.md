@@ -103,6 +103,25 @@ per-process total — hover any group's KB/s cell for a breakdown of how
 much is attributed to connections and how much is not. Nothing silently
 under-reports; it just gets vaguer.
 
+### Rows with no process (`—`, no PID, user `root`)
+
+Two different things look identical here, so porthawk labels them — hover
+the `—`:
+
+- **`TIME_WAIT` and friends.** Normal and unfixable. A closed socket is
+  handed to a stripped-down `inet_timewait_sock` that has no file
+  descriptor, so there is no process to find, and the kernel reports these
+  sockets as uid 0. That `root` is a kernel placeholder, **not** a root
+  process.
+- **Missing capabilities.** A process does own the socket, but
+  `/proc/<pid>/fd` was refused, so it cannot be identified. This is a real
+  fault: startup logs it with the exact `setcap` line to run, and Settings
+  → About shows the same while it lasts.
+
+File capabilities live on the inode, so **every rebuild or copy drops
+them** — `make install` verifies they stuck and fails loudly if not.
+`make doctor` prints the current state if you suspect this.
+
 The compiled object is committed, so a plain `go build` needs no clang and
 no kernel headers. It is built for the host architecture — on anything
 else, run `make bpf` to regenerate (needs `clang`, `bpftool`, and a kernel

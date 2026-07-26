@@ -457,6 +457,7 @@ tr:hover .kbtn{opacity:.7}
       <span class="mono">Space</span> pause · <span class="mono">Esc</span>
       drop the highlight
     </div>
+    <div class="hint" id="attrHint" hidden></div>
     <div class="hint" id="udpHint" hidden></div>
   </section>
   <section data-tab="about">
@@ -633,7 +634,7 @@ function rowVals(c){
     proto:c.proto, state:c.state,
     local:localLabel(c).txt,
     remote:remoteDisp(c),
-    host:c.host||'', owner:c.owner||'', alias:c.alias||'', ip:c.ra||'',
+    host:c.host||'', owner:c.owner||'', alias:c.alias||'', ip:c.ra||'', noPid:c.noPid||'',
     lhost:c.lhost||'', lowner:c.lowner||'', lalias:c.lalias||'',
     iface:c.if||'', liface:c.lif||'',
     // per-connection TCP counters; UDP rows have none (group header
@@ -643,6 +644,20 @@ function rowVals(c){
   };
 }
 const COLS=['comm','pid','user','proto','state','local','remote','downRate','upRate','down','up'];
+
+// Why a row has no process. "noproc" is the common, harmless one: the
+// kernel drops the socket's owner when it goes to TIME_WAIT, and reports
+// those sockets as uid 0 — which is why they read as root and look far
+// more alarming than they are.
+const NOPID={
+  noproc:'No process owns this socket. The kernel keeps none for TIME_WAIT '+
+         'and similar states, and reports them as uid 0 — so "root" here is '+
+         'the kernel\'s placeholder, not a root process.',
+  denied:'A process owns this socket, but porthawk was refused '+
+         '/proc/<pid>/fd and cannot see which. Missing capabilities — see '+
+         'Settings → About.',
+  gone:  'The owning process exited while this scan was running.',
+};
 
 // One-shot flash: add class now, remove after the hold; the CSS
 // transition then fades it out. Timer-driven, so DOM re-insertion
@@ -731,6 +746,9 @@ function patchRow(r,c){
   const t=r.tds;
   setTxt(t.comm,v.comm); setTxt(t.pid,String(v.pid)); setTxt(t.user,v.user);
   setTxt(t.proto,v.proto);
+  // An unattributed row is either harmless or a missing capability, and
+  // the two look identical ("—", no PID, user root). Say which.
+  t.comm.title=c.pid<0?NOPID[c.noPid]||'no process attached to this socket':'';
   if(t.state.textContent!==v.state){t.state.textContent=v.state;t.state.className='state '+v.state;}
   r.el.classList.toggle('ghost',c.state==='DISCONNECTED');
   setTxt(t.local,v.local);
@@ -1079,6 +1097,28 @@ function drawPanel(){
       +'remove them entirely.'
     : 'Disabled (-privileged=false). ufw blocking and killing another '
       +'user\'s process are not offered, and their endpoints do not exist.';
+
+  // Socket attribution. Only shown when it is actually degraded — a
+  // permanent "everything is fine" line is noise, but silence while rows
+  // render as "—/root" is what sent people hunting for a phantom root
+  // process.
+  const ah=$('#attrHint');
+  ah.hidden=!snap||!snap.attrBlocked;
+  if(snap&&snap.attrBlocked){
+    ah.textContent='';
+    const p=document.createElement('div');
+    p.textContent=snap.attrBlocked+' process'+(snap.attrBlocked===1?'':'es')+
+      ' refused porthawk /proc/<pid>/fd, so their connections show as "—" '+
+      'with no PID. The binary is missing its file capabilities — they live '+
+      'on the inode, so any rebuild or copy drops them. Fix with:';
+    const pre=document.createElement('div');
+    pre.className='mono'; pre.style.margin='6px 0'; pre.style.userSelect='all';
+    pre.textContent='sudo setcap "'+(snap.caps||'')+'+eip" ~/.local/bin/porthawk';
+    const p2=document.createElement('div');
+    p2.textContent='then restart porthawk. Rows in TIME_WAIT show "—" too, '+
+      'but that is normal: the kernel keeps no owning process for them.';
+    ah.appendChild(p); ah.appendChild(pre); ah.appendChild(p2);
+  }
 
   const uh=$('#udpHint');
   uh.hidden=!snap;
@@ -1543,6 +1583,16 @@ function groupHeader(g,open){
   setTxt(t.comm,(open?'▾ ':'▸ ')+(g.app||g.comm));
   const only=g.pids.size===1?[...g.pids][0]:null;
   setTxt(t.pid,g.pids.size>1?(g.pids.size+' pids'):(only>0?String(only):'?'));
+  // The unattributed group is the one that looks alarming from outside:
+  // "—", "?", root. Explain it on the header too — otherwise the answer is
+  // hidden behind expanding a group whose whole point is that it has
+  // nothing to expand into.
+  if(only>0||g.pids.size>1)t.comm.title='';
+  else{
+    const why=[...new Set(g.rows.map(r=>r.data&&r.data.c.noPid).filter(Boolean))];
+    t.comm.title=why.length===1?NOPID[why[0]]
+      :'No process could be attached to these sockets; hover a row for the reason.';
+  }
   setTxt(t.user,g.user);
   setTxt(t.proto,[...g.protos].sort().join(' '));
   const parts=[];

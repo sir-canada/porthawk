@@ -13,7 +13,29 @@ build:
 # every rebuild (file caps live on the inode).
 dev: build
 	sudo setcap "$(CAPS)+eip" ./$(BIN)
+	@$(MAKE) --no-print-directory verify-caps BINPATH=./$(BIN)
 	./$(BIN)
+
+# setcap can report success and still leave nothing behind: file
+# capabilities are an xattr, and a filesystem that does not carry them
+# (some NFS/overlay/encrypted setups) drops them silently. Then porthawk
+# runs, looks healthy, and quietly cannot attribute any other user's
+# socket. Check rather than assume.
+verify-caps:
+	@getcap "$(BINPATH)" | grep -q cap_sys_ptrace || { \
+	  echo ""; \
+	  echo "ERROR: capabilities did not stick on $(BINPATH)."; \
+	  c=$$(getcap '$(BINPATH)' 2>&1); echo "  getcap says: $${c:-(nothing at all)}"; \
+	  echo "  Without cap_dac_read_search + cap_sys_ptrace, sockets belonging to"; \
+	  echo "  other users cannot be mapped to a process: those rows render as"; \
+	  echo "  \"—\" with no PID and user root."; \
+	  echo "  Usual cause: a filesystem that does not support file capabilities"; \
+	  echo "  (xattr), e.g. NFS, some overlay or encrypted-home setups."; \
+	  echo "  Workaround: install to a path on a local filesystem, e.g."; \
+	  echo "    make install PREFIX=/usr/local"; \
+	  echo ""; \
+	  exit 1; }
+	@echo "capabilities ok: $$(getcap '$(BINPATH)')"
 
 # Install + run as a per-user service. One sudo, for setcap only; systemd
 # runs it as you, no root at runtime. File caps survive because the unit
@@ -21,6 +43,7 @@ dev: build
 install: build
 	install -Dm755 $(BIN) $(PREFIX)/bin/$(BIN)
 	sudo setcap "$(CAPS)+eip" $(PREFIX)/bin/$(BIN)
+	@$(MAKE) --no-print-directory verify-caps BINPATH=$(PREFIX)/bin/$(BIN)
 	install -Dm644 porthawk.service $(UNITDIR)/porthawk.service
 	systemctl --user daemon-reload
 	systemctl --user enable porthawk
@@ -51,4 +74,16 @@ restart: install
 clean:
 	rm -f $(BIN)
 
-.PHONY: build dev install uninstall bpf restart clean
+# Diagnose an install that is running but not attributing sockets.
+doctor:
+	@echo "binary:   $(PREFIX)/bin/$(BIN)"
+	@c=$$(getcap $(PREFIX)/bin/$(BIN) 2>&1); echo "caps:     $${c:-(none — this is the usual problem)}"
+	@echo "expected: $(CAPS)=eip"
+	@echo "service:  $$(systemctl --user is-active porthawk 2>&1)"
+	@echo "port:     $$(cat $(HOME)/.config/porthawk/port 2>/dev/null || echo '(not started yet)')"
+	@echo ""
+	@echo "attribution warnings in the log (if any):"
+	@journalctl --user -u porthawk -n 200 --no-pager 2>/dev/null \
+	  | grep -i attribution || echo "  (none)"
+
+.PHONY: build dev install uninstall bpf restart clean verify-caps doctor

@@ -152,7 +152,7 @@ no payload. That is physics, not leak.
 | File | Role |
 |---|---|
 | `main.go` | HTTP/WS server, token auth, 1 s snapshot broadcast loop |
-| `conns.go` | `/proc/net/{tcp,tcp6,udp,udp6}` parsing, socket inode → PID, `Conn` (the row shipped to the UI) |
+| `conns.go` | `/proc/net/{tcp,tcp6,udp,udp6}` parsing, socket inode → PID, `Conn` (the row shipped to the UI), `NoPID` reason + blocked-process count |
 | `procinfo.go` | app naming: cgroup scope, exe install path, cwd instances, ssh peer |
 | `nethogs.go` | child `nethogs -t -v1` parser → per-process cumulative KB + rates |
 | `tcpstats.go` | per-connection bytes from `ss -ti` (TCP only; UDP is `udpstats.go`'s job) |
@@ -227,6 +227,14 @@ match whatever names row ended up w/.
   `ifaceTTL` (10 s) so VPNs coming up and DHCP renewals land,
   failed enumeration keeps previous map rather than un-naming
   everything.
+- **`PID == -1` has three causes, don't collapse them.** `inode == 0`
+  means kernel keeps no owner (TIME_WAIT — reported as uid 0, so row
+  reads `root`; harmless). Inode set but unmapped means either we
+  were refused `/proc/<pid>/fd` (`denied` — real fault, needs caps) or
+  process exited mid-scan (`gone`). `walkProc` counts EACCES into
+  `Scanner.blocked`; `Conn.NoPID` carries reason to UI. Silent
+  degradation here is what made "phantom root process" reports
+  unanswerable — keep it loud.
 - **`Apply` recomputes `c.Hide`it never accumulates it.** flag is
   cleared at top of every call, b/c `Apply` also runs over ghost
   rows — frozen copies carrying whatever was true when socket died.

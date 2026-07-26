@@ -3,7 +3,9 @@ package main
 import (
 	"bufio"
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"log"
 	"net/netip"
 	"os"
 	"os/user"
@@ -55,7 +57,19 @@ type Conn struct {
 	DownKB   float64 `json:"down,omitempty"`
 	UpRate   float64 `json:"upRate,omitempty"`
 	DownRate float64 `json:"downRate,omitempty"`
+	// NoPID says why a row has no process attached, so the UI can tell the
+	// harmless case apart from the broken one:
+	//   "noproc" the kernel keeps no process for this socket (TIME_WAIT and
+	//            friends are inet_timewait_sock: no fd, no inode, no owner)
+	//   "denied" the owning process exists but we cannot read its fds
+	//   "gone"   it exited between the /proc walk and this scan
+	NoPID string `json:"noPid,omitempty"`
 }
+
+// capsNeeded mirrors CAPS in the Makefile. Kept here so the runtime hint
+// prints a command that actually works, rather than sending the user off to
+// find the right incantation.
+const capsNeeded = "cap_net_admin,cap_net_raw,cap_dac_read_search,cap_sys_ptrace,cap_bpf,cap_perfmon"
 
 var tcpStates = map[string]string{
 	"01": "ESTABLISHED", "02": "SYN_SENT", "03": "SYN_RECV",
@@ -72,6 +86,20 @@ type Scanner struct {
 	appCache  map[int]string    // pid -> app label
 	userCache map[uint32]string // uid -> username
 	lastWalk  time.Time
+	// blocked counts processes whose /proc/<pid>/fd we were refused in the
+	// last walk. Non-zero means attribution is degraded, not that a
+	// particular row is: it is the difference between "this socket has no
+	// owner" and "we are not allowed to see the owner".
+	blocked int
+	warned  bool
+}
+
+// Blocked reports how many processes were unreadable in the last /proc
+// walk. Zero means every socket that has an owner could be attributed.
+func (s *Scanner) Blocked() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.blocked
 }
 
 func NewScanner() *Scanner {
@@ -159,6 +187,16 @@ func (s *Scanner) Scan() []Conn {
 			c.PID = pid
 			c.Comm = s.comm(pid)
 			c.App = s.appLocked(pid, c.Comm)
+		} else if r.inode == 0 {
+			// No inode at all: the kernel is not holding a socket with an
+			// owner here. Nothing is wrong and nothing can be attributed.
+			c.NoPID = "noproc"
+		} else if s.blocked > 0 {
+			// There is an owner; we were refused somewhere in this walk, so
+			// the overwhelmingly likely reason is that it was this one.
+			c.NoPID = "denied"
+		} else {
+			c.NoPID = "gone"
 		}
 		c.CC, c.Flag = geoLookup(ra)
 		c.ID = fmt.Sprintf("%s|%s:%d|%s:%d", c.Proto, c.LAddr, c.LPort, c.RAddr, c.RPort)
@@ -176,6 +214,7 @@ func (s *Scanner) walkProc() {
 		return
 	}
 	livePids := make(map[int]bool, len(procs))
+	blocked := 0
 	for _, p := range procs {
 		pid, err := strconv.Atoi(p.Name())
 		if err != nil {
@@ -184,7 +223,14 @@ func (s *Scanner) walkProc() {
 		livePids[pid] = true
 		fds, err := os.ReadDir("/proc/" + p.Name() + "/fd")
 		if err != nil {
-			continue // gone or unreadable
+			// A process exiting mid-walk is ordinary churn. Permission
+			// denied is not: it means this build cannot see other users'
+			// sockets, and every one of them will show up unattributed with
+			// no hint as to why. Count it so we can say so out loud.
+			if errors.Is(err, os.ErrPermission) {
+				blocked++
+			}
+			continue
 		}
 		for _, fd := range fds {
 			link, err := os.Readlink("/proc/" + p.Name() + "/fd/" + fd.Name())
@@ -198,6 +244,22 @@ func (s *Scanner) walkProc() {
 		}
 	}
 	s.inodePID = fresh
+	s.blocked = blocked
+	// Say it once, at the log, with the fix in it. Silent degradation is
+	// what made this hard to diagnose: the rows just render as "—" and
+	// "root" and look like a mystery root process rather than a missing
+	// capability.
+	if blocked > 0 && !s.warned {
+		s.warned = true
+		exe, err := os.Executable()
+		if err != nil {
+			exe = "/path/to/porthawk"
+		}
+		log.Printf("socket attribution degraded — %d process(es) refused us /proc/<pid>/fd", blocked)
+		log.Printf("attribution: their connections show as \"—\" with no PID. To fix:")
+		log.Printf("attribution:   sudo setcap \"%s+eip\" %s", capsNeeded, exe)
+		log.Printf("attribution: then restart. File caps live on the inode, so every rebuild drops them.")
+	}
 	for pid := range s.commCache {
 		if !livePids[pid] {
 			delete(s.commCache, pid)

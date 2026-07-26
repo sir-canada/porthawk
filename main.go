@@ -46,10 +46,15 @@ type Snapshot struct {
 	// GhostTTL is the DISCONNECTED linger window in seconds, echoed back so
 	// a reload or a second tab shows the value actually in force rather
 	// than whatever that browser last typed.
-	GhostTTL int              `json:"ghostTTL"`
-	Totals   ProcStat         `json:"totals"`
-	Procs    map[int]ProcStat `json:"procs"`
-	Conns    []Conn           `json:"conns"`
+	GhostTTL int `json:"ghostTTL"`
+	// AttrBlocked counts processes that refused us /proc/<pid>/fd on the
+	// last walk. Non-zero means unattributed rows are a missing capability,
+	// not a mystery.
+	AttrBlocked int              `json:"attrBlocked"`
+	Caps        string           `json:"caps"` // capability list the fix needs
+	Totals      ProcStat         `json:"totals"`
+	Procs       map[int]ProcStat `json:"procs"`
+	Conns       []Conn           `json:"conns"`
 }
 
 type server struct {
@@ -461,9 +466,10 @@ func (s *server) broadcastLoop(ctx context.Context) {
 			DNS: s.resolver.Enabled(), Owner: s.owner.Enabled(),
 			Rules: s.rules.Snapshot(), Cfg: s.cfgDir, Totals: totals,
 			UDPAcct: s.udp.Available(), UDPWhy: s.udp.Why(),
-			Priv:     s.privileged,
-			GhostTTL: int(s.ghosts.TTL() / time.Second),
-			Procs:    procs, Conns: conns,
+			Priv:        s.privileged,
+			GhostTTL:    int(s.ghosts.TTL() / time.Second),
+			AttrBlocked: s.scanner.Blocked(), Caps: capsNeeded,
+			Procs: procs, Conns: conns,
 		}
 		buf, err := json.Marshal(snap)
 		if err != nil {
