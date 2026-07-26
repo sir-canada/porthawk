@@ -14,9 +14,9 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -42,10 +42,14 @@ type Snapshot struct {
 	UDPWhy  string `json:"udpWhy,omitempty"`
 	// Priv tells the UI whether to offer the actions that need a desktop
 	// authentication prompt. Off means the routes are not even registered.
-	Priv   bool             `json:"priv"`
-	Totals ProcStat         `json:"totals"`
-	Procs  map[int]ProcStat `json:"procs"`
-	Conns  []Conn           `json:"conns"`
+	Priv bool `json:"priv"`
+	// GhostTTL is the DISCONNECTED linger window in seconds, echoed back so
+	// a reload or a second tab shows the value actually in force rather
+	// than whatever that browser last typed.
+	GhostTTL int              `json:"ghostTTL"`
+	Totals   ProcStat         `json:"totals"`
+	Procs    map[int]ProcStat `json:"procs"`
+	Conns    []Conn           `json:"conns"`
 }
 
 type server struct {
@@ -95,7 +99,7 @@ func main() {
 		scanner: NewScanner(),
 		hogs:    NewHogs(),
 		tcp:     NewTCPStats(),
-		ghosts:  NewGhosts(),
+		ghosts:  NewGhosts(prefs.ghostTTL),
 		clients: map[*websocket.Conn]context.CancelFunc{},
 	}
 	s.resolver = NewResolver(prefs.dns)
@@ -126,6 +130,7 @@ func main() {
 	mux.HandleFunc("/api/dns", s.auth(s.handleDNS))
 	mux.HandleFunc("/api/owner", s.auth(s.handleOwner))
 	mux.HandleFunc("/api/rules", s.auth(s.handleRules))
+	mux.HandleFunc("/api/ghostttl", s.auth(s.handleGhostTTL))
 	// Privileged actions. Each one re-authenticates through polkit at the
 	// desktop, so the token alone can never reach them (see elevate.go).
 	if *privileged {
@@ -319,6 +324,28 @@ func (s *server) handleOwner(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleGhostTTL sets how long DISCONNECTED rows linger. The value is
+// clamped rather than rejected — the UI number input can be typed into
+// freely, and a silently corrected 9999 is friendlier than an error the
+// panel would have to find somewhere to display.
+func (s *server) handleGhostTTL(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Seconds int `json:"seconds"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64)).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	d := clampGhostTTL(time.Duration(body.Seconds) * time.Second)
+	s.ghosts.SetTTL(d)
+	savePref(s.cfgDir, "ghostTTL", int(d/time.Second))
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // readToggle decodes {"enabled": bool} from a POST, writing the error
 // response itself if the request is malformed.
 func readToggle(w http.ResponseWriter, r *http.Request) (bool, bool) {
@@ -415,7 +442,7 @@ func (s *server) broadcastLoop(ctx context.Context) {
 		// Ghost rows are frozen copies of sockets that have already died,
 		// so they carry the rule flags that were true at the time. Rules
 		// are live state — a hide rule deleted a second ago must stop
-		// applying now, not 45 s from now when the ghost expires — so
+		// applying now, not whenever the ghost window expires — so
 		// re-evaluate them against the current rules.
 		for i := nLive; i < len(conns); i++ {
 			s.rules.Apply(&conns[i])
@@ -434,8 +461,9 @@ func (s *server) broadcastLoop(ctx context.Context) {
 			DNS: s.resolver.Enabled(), Owner: s.owner.Enabled(),
 			Rules: s.rules.Snapshot(), Cfg: s.cfgDir, Totals: totals,
 			UDPAcct: s.udp.Available(), UDPWhy: s.udp.Why(),
-			Priv:  s.privileged,
-			Procs: procs, Conns: conns,
+			Priv:     s.privileged,
+			GhostTTL: int(s.ghosts.TTL() / time.Second),
+			Procs:    procs, Conns: conns,
 		}
 		buf, err := json.Marshal(snap)
 		if err != nil {
@@ -460,21 +488,23 @@ func (s *server) broadcastLoop(ctx context.Context) {
 // ---- prefs ----
 
 type prefs struct {
-	dns   bool // reverse DNS (default on: your resolver already sees this traffic)
-	owner bool // RDAP ownership (default off: it queries a third party)
+	dns      bool          // reverse DNS (default on: your resolver already sees this traffic)
+	owner    bool          // RDAP ownership (default off: it queries a third party)
+	ghostTTL time.Duration // how long DISCONNECTED rows linger; 0 disables them
 }
 
 func prefsPath(dir string) string { return filepath.Join(dir, "config.json") }
 
 func loadPrefs(dir string) prefs {
-	p := prefs{dns: true, owner: false}
+	p := prefs{dns: true, owner: false, ghostTTL: defaultGhostTTL}
 	b, err := os.ReadFile(prefsPath(dir))
 	if err != nil {
 		return p
 	}
 	var c struct {
-		DNS   *bool `json:"dns"`
-		Owner *bool `json:"owner"`
+		DNS      *bool `json:"dns"`
+		Owner    *bool `json:"owner"`
+		GhostTTL *int  `json:"ghostTTL"` // seconds
 	}
 	if json.Unmarshal(b, &c) == nil {
 		if c.DNS != nil {
@@ -483,13 +513,20 @@ func loadPrefs(dir string) prefs {
 		if c.Owner != nil {
 			p.owner = *c.Owner
 		}
+		if c.GhostTTL != nil {
+			p.ghostTTL = clampGhostTTL(time.Duration(*c.GhostTTL) * time.Second)
+		}
 	}
 	return p
 }
 
 // savePref updates one key, preserving the others already in the file.
-func savePref(dir string, key string, v bool) {
-	m := map[string]bool{}
+// The decoded map is map[string]any rather than map[string]bool because
+// the file holds numbers as well as toggles now — decoding into the
+// narrower type would fail on the whole file and silently drop every
+// other setting the next time a toggle was flipped.
+func savePref(dir string, key string, v any) {
+	m := map[string]any{}
 	if b, err := os.ReadFile(prefsPath(dir)); err == nil {
 		json.Unmarshal(b, &m)
 	}

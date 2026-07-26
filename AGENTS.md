@@ -158,7 +158,7 @@ no payload. That is physics, not leak.
 | `tcpstats.go` | per-connection bytes from `ss -ti` (TCP only; UDP is `udpstats.go`'s job) |
 | `udpstats.go` + `bpf/udp.c` | optional eBPF per-socket UDP byte counters; degrades to "unavailable" and never blocks startup |
 | `iface.go` | local addresses → the adapter they're assigned to (`10.2.2.28` → `wlan0`) |
-| `ghosts.go` | keeps vanished ESTABLISHED conns visible as DISCONNECTED for 45 s |
+| `ghosts.go` | keeps vanished ESTABLISHED conns visible as DISCONNECTED for a configurable window (default 45 s, 0 = off) |
 | `dns.go` | cached, toggleable reverse DNS, server-side |
 | `owner.go` | IP-range ownership via Team Cymru's IP-to-ASN DNS: per-BGP-prefix cache, `owners.json`, `/api/owner` |
 | `rules.go` | user aliases + hide rules, `rules.json`, `/api/rules` |
@@ -231,7 +231,7 @@ match whatever names row ended up w/.
   cleared at top of every call, b/c `Apply` also runs over ghost
   rows — frozen copies carrying whatever was true when socket died.
   w/o reset, rule you deleted kept hiding those rows for
-   ghost's full 45 s. `main.go` re-applies rules to ghost tail
+   ghost's full linger window. `main.go` re-applies rules to ghost tail
   after `ghosts.Track` for same reason.
 - **Owner exclusions match ownership only.** `exclStrs` is checked
   against `c.Owner`/`c.LOwner` and deliberately not against `Host`

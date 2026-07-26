@@ -122,7 +122,7 @@ with BTF at `/sys/kernel/btf/vmlinux`), or don't, and accept the fallback.
 | Ownership | opt-in Team Cymru IP-to-ASN DNS for addresses reverse DNS can't name: plain TXT lookups through the system resolver, no HTTP, no API key — `<reversed-octets>.origin.asn.cymru.com` (`origin6` and reversed nibbles for v6) for the origin AS, then `AS<n>.asn.cymru.com` for its description; name taken from the organisation part (`ANTHROPIC - Anthropic, PBC, US` → `Anthropic, PBC`), AS descriptions memoised for the process; cached per **BGP-announced prefix**, so one answer names every address in the range; `~/.config/porthawk/owners.json`, 24 h TTL / 1 h when nothing announces the address / 5 min after a lookup failure; 4 workers, queries 200 ms apart (paced for the local resolver, which drops answers under a burst) |
 | Rules | `~/.config/porthawk/rules.json`, hand-editable: `{"aliases":[{"match":"160.79.104.0/21","name":"Anthropic"}],"hidden":[{"match":"Anthropic"}]}` — `match` is an IP, a CIDR or a name substring, most specific network wins; also `GET`/`POST /api/rules` |
 | Push | WebSocket, full snapshot every 1 s, permessage-deflate; enrichment (traffic, DNS) skipped when no tab is open |
-| Ghosts | connections scanned every tick even with no tab open; an ESTABLISHED socket that vanishes lingers as state `DISCONNECTED` for 45 s, so one that dies as you open the UI is still visible |
+| Ghosts | connections scanned every tick even with no tab open; an ESTABLISHED socket that vanishes lingers as state `DISCONNECTED` for a configurable window (default 45 s), so one that dies as you open the UI is still visible |
 
 Traffic granularity is per **process** (kernel doesn't account per
 connection); each row shows its process's rates, and the `group` view
@@ -153,8 +153,9 @@ keyed DOM patching, no framework, no build step.
 - Hover a flag for the country name (from the browser's
   `Intl.DisplayNames`, so no country table ships in the repo). The
   symbolic ones: 🔁 loopback, 🏠 private/LAN, 🛡 VPN/tunnel, 🏳️ unknown.
-- A closed connection lingers ~45 s as a dimmed, italic `DISCONNECTED`
-  ghost row (red edges) before it fades out.
+- A closed connection lingers as a dimmed, italic `DISCONNECTED` ghost row
+  (red edges) before it fades out — 45 s by default, adjustable under
+  Settings → Traffic (0 turns it off).
 - Click column headers to sort; rate/total columns default descending.
 - Click a PID to copy it. Hover a row you own → ✕ (SIGTERM, then `9!`
   for SIGKILL escalation).

@@ -121,7 +121,8 @@ td.state.UNCONN{color:var(--warn)}
 td.state.TIME_WAIT,td.state.CLOSE_WAIT,td.state.FIN_WAIT1,td.state.FIN_WAIT2,
 td.state.CLOSING,td.state.LAST_ACK,td.state.CLOSE{color:var(--dim)}
 td.state.DISCONNECTED{color:var(--bad); font-weight:600}
-/* ghost: a connection that just vanished, held ~45s so you can see it die */
+/* ghost: a connection that just vanished, held briefly so you can see it
+   die (window configurable in Settings > Traffic) */
 /* tint is translucent so the tr-level dying/new flash backgrounds still read
    through it; alpha is doubled to survive the .5 opacity above */
 tr.ghost td{opacity:.5; font-style:italic; background:rgba(240,113,120,.14)}
@@ -389,6 +390,21 @@ tr:hover .kbtn{opacity:.7}
         ><button data-r="10">10</button><button data-r="100">100</button>
       </span>
     </div>
+    <h3>Disconnected rows</h3>
+    <div class="hint">How long a connection keeps its place in the table
+      after the kernel drops the socket, greyed out as
+      <span class="mono">DISCONNECTED</span> — long enough to read what just
+      closed. <span class="mono">off</span> removes them the instant they
+      die. This one is enforced by the server, so it applies to every
+      browser watching and survives a restart.</div>
+    <div class="field">
+      <input id="ghostTTL" type="number" min="0" max="600" step="5" value="45">
+      <span class="mono">s</span>
+      <span class="quick" id="ghostTTLQuick">
+        <button data-g="0">off</button><button data-g="15">15</button
+        ><button data-g="45">45</button><button data-g="120">120</button>
+      </span>
+    </div>
     <h3>Rate bars</h3>
     <div class="hint">The bar behind each KB/s figure. Scaled colour keeps a
       trickle faint and makes a megabyte a second impossible to miss; fixed
@@ -530,6 +546,7 @@ function connect(){
     // buttons never lie about what the backend is actually doing
     $('#dns').classList.toggle('on', latest.dns);
     $('#owner').classList.toggle('on', latest.owner);
+    syncGhostTTL();
     // snapshots arrive ~1/s; the refresh timer drives the redraw so the
     // display updates at the user's chosen interval. Paint the very first
     // one immediately so the table isn't blank until the first tick.
@@ -1577,6 +1594,47 @@ $('#minRateQuick').onclick=e=>{
   applyMinRate(b.dataset.r);
 };
 applyMinRate(+localStorage.getItem('porthawk.minrate')||0);
+
+// how long DISCONNECTED rows linger (0 = off). Unlike every other numeric
+// control here this one is server state: the expiry happens in the backend,
+// so it is POSTed and stored in config.json instead of localStorage, and
+// the snapshot is what the box reflects.
+let ghostSend=null;
+function markGhostQuick(sec){
+  document.querySelectorAll('#ghostTTLQuick button')
+    .forEach(b=>b.classList.toggle('on',+b.dataset.g===sec));
+}
+// Reflect server state, but never yank the value out from under someone
+// mid-edit — snapshots land once a second and would fight the keyboard.
+function syncGhostTTL(){
+  if(!latest||ghostSend)return;
+  const el=$('#ghostTTL');
+  if(document.activeElement!==el)el.value=latest.ghostTTL;
+  markGhostQuick(latest.ghostTTL);
+}
+function pushGhostTTL(v){
+  const sec=Math.max(0,Math.min(600,Math.round(+v||0)));
+  markGhostQuick(sec);
+  // Debounced: holding the spinner or typing "120" must not fire a request
+  // per intermediate value.
+  clearTimeout(ghostSend);
+  ghostSend=setTimeout(()=>{
+    fetch('/api/ghostttl',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({seconds:sec})})
+      .then(res=>{
+        ghostSend=null;
+        if(res.ok&&latest)latest.ghostTTL=sec;
+      })
+      .catch(()=>{ghostSend=null;});
+  },350);
+}
+$('#ghostTTL').oninput=e=>pushGhostTTL(e.target.value);
+$('#ghostTTL').onkeydown=e=>e.stopPropagation(); // space must not toggle pause
+$('#ghostTTLQuick').onclick=e=>{
+  const b=e.target.closest('button'); if(!b)return;
+  $('#ghostTTL').value=b.dataset.g;
+  pushGhostTTL(b.dataset.g);
+};
 
 // rate-bar colour scale (persisted; default on)
 function applyBarScale(v){
