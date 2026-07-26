@@ -130,6 +130,13 @@ tr.ghost td{opacity:.5; font-style:italic; background:rgba(240,113,120,.14)}
 tr.ghost td:first-child{box-shadow:inset 2px 0 0 var(--bad)}
 tr.ghost td:last-child{box-shadow:inset -2px 0 0 var(--bad)}
 tr.ghost:hover td{opacity:.75}
+/* keyboard cursor. Declared after .ghost so its edge marker wins on rows
+   that are both; background is tinted rather than solid so the ghost and
+   flash tints still read through it. */
+tr.cur td{background:rgba(110,200,255,.13)}
+tr.cur td:first-child{box-shadow:inset 3px 0 0 var(--acc)}
+tr.cur td:last-child{box-shadow:inset -3px 0 0 var(--acc)}
+tr.grp.cur td{background:rgba(110,200,255,.16)}
 td.host,td.user{color:var(--dim); max-width:230px; overflow:hidden; text-overflow:ellipsis}
 td.local,td.remote{overflow:hidden; text-overflow:ellipsis; max-width:280px}
 /* a name the user chose themselves reads as authoritative; an RDAP range
@@ -262,6 +269,16 @@ tr.hid:hover td{opacity:.8}
 .copyable{cursor:pointer}
 tbody td.copyable:hover{color:var(--acc)}
 td.copyable.copied{color:var(--ok)}
+/* "Copied X" bubble, anchored to whatever was copied. Opacity transition
+   rather than an animation, same reason as the row flash. */
+#copied{
+  position:fixed; z-index:70; padding:4px 9px; border-radius:4px;
+  background:var(--bg2); border:1px solid var(--ok); color:var(--ok);
+  font-size:12px; white-space:nowrap; pointer-events:none;
+  box-shadow:0 4px 14px rgba(0,0,0,.6);
+  opacity:0; transform:translateY(3px); transition:opacity .12s, transform .12s;
+}
+#copied.show{opacity:1; transform:translateY(0)}
 td.rate{position:relative}
 td.rate .bar{
   position:absolute; right:0; top:15%; bottom:15%; z-index:0;
@@ -428,6 +445,18 @@ tr:hover .kbtn{opacity:.7}
     <div class="hint" id="privHint"></div>
   </section>
   <section data-tab="about">
+    <h3>Keyboard</h3>
+    <div class="hint">
+      <span class="mono">↑ ↓</span> move through the table ·
+      <span class="mono">Home / End</span> first / last row<br>
+      <span class="mono">→ / Enter</span> expand a group (again to step into
+      it) · <span class="mono">←</span> collapse, or jump out to the group
+      header<br>
+      <span class="mono">Ctrl-C</span> copy the highlighted address ·
+      <span class="mono">Ctrl-Shift-C</span> copy the whole row<br>
+      <span class="mono">Space</span> pause · <span class="mono">Esc</span>
+      drop the highlight
+    </div>
     <div class="hint" id="udpHint" hidden></div>
   </section>
   <section data-tab="about">
@@ -480,6 +509,11 @@ const rows=new Map();            // id -> {el, tds, data, deadAt}
 const expanded=new Set();        // group keys currently expanded
 const ghdrs=new Map();           // group key -> {el, arrow, name, sub}
 let killStage=new Map();         // pid -> 'term'|'kill' sent
+// Keyboard cursor, held as a stable key ('c:'+conn id / 'g:'+group key)
+// rather than an element: render() rebuilds the visible sequence from
+// scratch every tick, and a raw element reference would go stale the
+// moment a group collapses or a dead row is purged.
+let curKey=null;
 
 // ---- formatting ----
 const fmtRate=k=> k>=1000?(k/1024).toFixed(1)+'M' : k>=100?k.toFixed(0) : k>=10?k.toFixed(1):k.toFixed(2);
@@ -618,10 +652,42 @@ function flash(el){
   setTimeout(()=>el.classList.remove('new'),1500);
 }
 
-function copyIP(td){
-  const ip=td.dataset.ip; if(!ip)return;
-  navigator.clipboard.writeText(ip);
-  td.classList.add('copied'); setTimeout(()=>td.classList.remove('copied'),600);
+// Every copy in the UI goes through here: clipboard write, the green flash
+// on whatever was clicked, and a bubble naming what actually landed on the
+// clipboard. One helper because the context-menu copies used to give no
+// feedback at all, so a menu click looked exactly like a misclick.
+function copyText(text,el){
+  text=String(text==null?'':text);
+  if(!text)return;
+  navigator.clipboard.writeText(text).then(()=>{
+    if(el){el.classList.add('copied'); setTimeout(()=>el.classList.remove('copied'),600);}
+    showCopied(text,el);
+  }).catch(()=>toast('could not write to the clipboard',true));
+}
+function copyIP(td){ copyText(td.dataset.ip,td); }
+
+// Anchored confirmation. Positioned off the element's rect rather than a
+// mouse event, so a keyboard copy — which has no cursor to sit under —
+// lands in the same place. Viewport clamp mirrors showMenu().
+let copyBub=null, copyBubT=null;
+function showCopied(text,el){
+  if(!copyBub){
+    copyBub=document.createElement('div'); copyBub.id='copied';
+    document.body.appendChild(copyBub);
+  }
+  // Commands can be hundreds of characters; the bubble confirms what was
+  // copied, it does not have to reproduce it.
+  const oneline=text.replace(/\s+/g,' ').trim();
+  copyBub.textContent='Copied "'+(oneline.length>52?oneline.slice(0,51)+'…':oneline)+'"';
+  const r=(el&&el.isConnected?el:tb).getBoundingClientRect();
+  const w=copyBub.offsetWidth, h=copyBub.offsetHeight;
+  let top=r.top-h-6;
+  if(top<4)top=r.bottom+6;           // no room above: flip below
+  copyBub.style.left=Math.max(6,Math.min(r.left+r.width/2-w/2, innerWidth-w-6))+'px';
+  copyBub.style.top =Math.max(6,Math.min(top, innerHeight-h-6))+'px';
+  copyBub.classList.add('show');
+  clearTimeout(copyBubT);
+  copyBubT=setTimeout(()=>copyBub.classList.remove('show'),1400);
 }
 
 function makeRow(c){
@@ -634,8 +700,7 @@ function makeRow(c){
     if(k==='comm'){td.className='comm';
       td.oncontextmenu=e=>{e.preventDefault();openProcMenu(e,tr._id);};}
     else if(k==='pid'){td.className='pid num';td.title='click: copy PID · right-click: more';
-      td.onclick=()=>{navigator.clipboard.writeText(String(td.textContent));
-        td.classList.add('copied');setTimeout(()=>td.classList.remove('copied'),600);};
+      td.onclick=()=>copyText(td.textContent,td);
       td.oncontextmenu=e=>{e.preventDefault();openProcMenu(e,tr._id);};}
     else if(k==='state')td.className='state';
     else if(k==='user')td.className='user';
@@ -655,6 +720,9 @@ function makeRow(c){
   }
   const kc=document.createElement('td'); kc.className='kill';
   tr.appendChild(kc); tds._kill=kc;
+  // Clicking a row moves the keyboard cursor there, so mouse and keyboard
+  // never disagree about where you are. Cell handlers run first and bubble.
+  tr.addEventListener('click',()=>setCur(tr,false));
   return {el:tr, tds, data:null, deadAt:0};
 }
 
@@ -816,10 +884,13 @@ function openProcMenu(e,id){
   const items=[];
   const add=(l,fn,cls)=>items.push({label:l,fn,cls});
 
-  add('copy PID '+c.pid, ()=>navigator.clipboard.writeText(String(c.pid)));
-  add('copy name "'+label+'"', ()=>navigator.clipboard.writeText(label));
+  // Anchor the confirmation to the cell that was right-clicked: the menu
+  // itself is gone by the time the copy runs.
+  const at=e.target;
+  add('copy PID '+c.pid, ()=>copyText(c.pid,at));
+  add('copy name "'+label+'"', ()=>copyText(label,at));
   if(v.comm&&v.comm!==label)
-    add('copy command "'+v.comm+'"', ()=>navigator.clipboard.writeText(v.comm));
+    add('copy command "'+v.comm+'"', ()=>copyText(v.comm,at));
   items.push({sep:true});
 
   const mine=snap&&c.uid===snap.me;
@@ -855,7 +926,8 @@ function openMenu(e,id,col){
   const items=[];
   const add=(label,fn,cls)=>items.push({label,fn,cls});
 
-  add('copy '+ip, ()=>navigator.clipboard.writeText(ip));
+  const at=e.target;
+  add('copy '+ip, ()=>copyText(ip,at));
   items.push({sep:true});
 
   const cur=(snap&&snap.rules&&snap.rules.aliases||[]).find(a=>(a.match||'').toLowerCase()===ip.toLowerCase());
@@ -955,6 +1027,11 @@ function closePanel(){
   $('#veil').classList.add('hidden');
   $('#panel').classList.add('hidden');
   $('#gear').classList.remove('on');
+  // openPanel() focuses the alias field, and that focus outlives the panel:
+  // leave it there and every table shortcut is swallowed as "typing" until
+  // the user thinks to click the table.
+  const a=document.activeElement;
+  if(a&&a!==document.body&&$('#panel').contains(a))a.blur();
 }
 $('#gear').onclick=()=>panelOpen?closePanel():openPanel();
 $('#panelx').onclick=closePanel;
@@ -1130,7 +1207,9 @@ $('#aliasAddBtn').onclick=addAlias;
 $('#hideAddBtn').onclick=addHide;
 $('#exclAddBtn').onclick=addExcl;
 for(const [id,fn] of [['#aliasM',addAlias],['#aliasN',addAlias],['#hideM',addHide],['#exclM',addExcl]])
-  $(id).onkeydown=e=>{ e.stopPropagation(); if(e.key==='Enter')fn(); };
+  // Escape is deliberately let through: openPanel focuses one of these
+  // fields, so swallowing it here means Escape never closes the panel.
+  $(id).onkeydown=e=>{ if(e.key!=='Escape')e.stopPropagation(); if(e.key==='Enter')fn(); };
 
 // ---- panel tabs ----
 function setPanelTab(t){
@@ -1383,6 +1462,7 @@ function render(){
   }
   for(const [k,h] of ghdrs)if(!liveKeys.has(k)){h.el.remove();ghdrs.delete(k);}
   applySeq(seq);
+  applyCursor();   // the sequence was just rebuilt; re-mark the cursor row
   // freeze column widths once, after the session settles (DNS resolved),
   // so expand/collapse no longer reflows the table. Reload re-measures.
   if(!colsLocked && !lockScheduled && vis.length){ lockScheduled=true; setTimeout(lockColumns,2500); }
@@ -1438,10 +1518,7 @@ function groupHeader(g,open){
     tds.comm =mk('comm');
     tds.pid  =mk('pid num');
     tds.pid.title='click: copy PID';
-    tds.pid.onclick=e=>{e.stopPropagation();
-      navigator.clipboard.writeText(tds.pid.textContent);
-      tds.pid.classList.add('copied');
-      setTimeout(()=>tds.pid.classList.remove('copied'),600);};
+    tds.pid.onclick=e=>{e.stopPropagation(); copyText(tds.pid.textContent,tds.pid);};
     tds.user =mk('user');
     tds.proto=mk('');
     tds.state=mk('state');
@@ -1452,9 +1529,16 @@ function groupHeader(g,open){
     tds.up   =mk('num');
     tds.kill =mk('kill');
     const key=g.key;
-    tr.onclick=()=>{expanded.has(key)?expanded.delete(key):expanded.add(key);render();};
+    tr._gkey=key;
+    tr.onclick=()=>{
+      setCur(tr,false);
+      expanded.has(key)?expanded.delete(key):expanded.add(key);
+      render();
+    };
     h={el:tr,tds}; ghdrs.set(key,h);
   }
+  // What Ctrl-C yields on a group header: the app/process name.
+  h.el._gcopy=g.app||g.comm||'';
   const t=h.tds;
   setTxt(t.comm,(open?'▾ ':'▸ ')+(g.app||g.comm));
   const only=g.pids.size===1?[...g.pids][0]:null;
@@ -1494,6 +1578,49 @@ function groupHeader(g,open){
 // clamps scrollTop to 0 — that jump is what reads as "the table
 // refreshed" on every expand/collapse. So: walk the wanted order and
 // touch only the rows that are actually out of place.
+// ---- keyboard cursor ----
+// tb.children is the authoritative visible order: collapsed groups have
+// their members absent from the DOM entirely, not hidden, so walking it
+// matches exactly what is on screen.
+const rowKey=el=>el.classList.contains('grp')?('g:'+el._gkey):('c:'+el._id);
+function curEl(){
+  if(curKey===null)return null;
+  for(const el of tb.children)if(rowKey(el)===curKey)return el;
+  return null;
+}
+// Re-applied after every render: the cursor survives sorting and regroup,
+// and drops itself if the row it pointed at is gone.
+function applyCursor(){
+  let found=null;
+  for(const el of tb.children){
+    const on=curKey!==null&&rowKey(el)===curKey;
+    el.classList.toggle('cur',on);
+    if(on)found=el;
+  }
+  if(curKey!==null&&!found)curKey=null;
+  return found;
+}
+function setCur(el,scroll){
+  curKey=el?rowKey(el):null;
+  applyCursor();
+  if(el&&scroll!==false)el.scrollIntoView({block:'nearest'});
+}
+function moveCur(d){
+  const els=[...tb.children];
+  if(!els.length)return;
+  let i=els.findIndex(el=>rowKey(el)===curKey);
+  i = i<0 ? (d>0?0:els.length-1) : Math.max(0,Math.min(els.length-1,i+d));
+  setCur(els[i]);
+}
+// Ctrl-Shift-C: the whole row as one tab-separated line, for pasting
+// somewhere that wants the context and not just the address.
+function rowLine(r){
+  const v=r.data.v;
+  return [v.comm,v.pid,v.user,v.proto,v.state,v.local,v.remote,
+    fmtRate(v.downRate),fmtRate(v.upRate),fmtTot(v.down),fmtTot(v.up)]
+    .map(x=>String(x==null?'':x)).join('\t');
+}
+
 function applySeq(seq){
   const want=new Set(seq);
   for(const el of [...tb.children])if(!want.has(el))el.remove();
@@ -1588,7 +1715,7 @@ function applyMinRate(v,fromInput){
   render();
 }
 $('#minRate').oninput=e=>applyMinRate(e.target.value,true);
-$('#minRate').onkeydown=e=>e.stopPropagation(); // space must not toggle pause
+$('#minRate').onkeydown=e=>{if(e.key!=='Escape')e.stopPropagation();}; // space must not toggle pause
 $('#minRateQuick').onclick=e=>{
   const b=e.target.closest('button'); if(!b)return;
   applyMinRate(b.dataset.r);
@@ -1629,7 +1756,7 @@ function pushGhostTTL(v){
   },350);
 }
 $('#ghostTTL').oninput=e=>pushGhostTTL(e.target.value);
-$('#ghostTTL').onkeydown=e=>e.stopPropagation(); // space must not toggle pause
+$('#ghostTTL').onkeydown=e=>{if(e.key!=='Escape')e.stopPropagation();}; // space must not toggle pause
 $('#ghostTTLQuick').onclick=e=>{
   const b=e.target.closest('button'); if(!b)return;
   $('#ghostTTL').value=b.dataset.g;
@@ -1684,6 +1811,62 @@ document.addEventListener('keydown',e=>{
   if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return;
   e.preventDefault();
   $('#pause').click();
+});
+
+// Table navigation. Stricter guard than the Space handler above: while the
+// settings panel or the context menu is open they own the arrow keys, so
+// navigation stays out entirely rather than fighting a number input for
+// ArrowUp. Arrows are preventDefault'd so the page doesn't scroll under us.
+document.addEventListener('keydown',e=>{
+  const t=(document.activeElement||{}).tagName;
+  if(t==='INPUT'||t==='TEXTAREA'||t==='SELECT')return;
+  if(panelOpen||!menu.classList.contains('hidden'))return;
+  const k=e.key;
+
+  if(k==='ArrowDown'||k==='ArrowUp'){ e.preventDefault(); moveCur(k==='ArrowDown'?1:-1); return; }
+  if(k==='Home'||k==='End'){
+    e.preventDefault();
+    const els=[...tb.children];
+    if(els.length)setCur(k==='Home'?els[0]:els[els.length-1]);
+    return;
+  }
+  if(k==='Escape'&&curKey!==null){ setCur(null); return; }
+
+  const el=curEl();
+  if(!el)return;
+  const grp=el.classList.contains('grp');
+
+  if(grp&&(k==='Enter'||k==='ArrowRight'||k==='ArrowLeft')){
+    const key=el._gkey, open=expanded.has(key);
+    e.preventDefault();
+    // Right on an already-open group steps into it rather than doing
+    // nothing; left on a closed one is the only no-op.
+    if(k==='ArrowRight'&&open){ moveCur(1); return; }
+    if(k==='ArrowLeft'&&!open)return;
+    open?expanded.delete(key):expanded.add(key);
+    render();
+    return;
+  }
+  if(!grp&&k==='ArrowLeft'){
+    // On a member row, left escapes to the group header above it.
+    e.preventDefault();
+    const els=[...tb.children];
+    for(let i=els.indexOf(el);i>=0;i--)
+      if(els[i].classList.contains('grp')){ setCur(els[i]); return; }
+    return;
+  }
+  if((e.ctrlKey||e.metaKey)&&(k==='c'||k==='C')){
+    // A real text selection means the user wants the browser's own copy.
+    const sel=window.getSelection&&String(window.getSelection());
+    if(sel&&sel.trim())return;
+    e.preventDefault();
+    if(grp){ copyText(el._gcopy,el.querySelector('td.comm')); return; }
+    const r=rows.get(el._id);
+    if(!r||!r.data)return;
+    if(e.shiftKey)copyText(rowLine(r),el.querySelector('td.remote'));
+    else copyText(r.data.v.ip||r.data.v.remote,el.querySelector('td.remote'));
+    return;
+  }
 });
 
 // show the default sort arrow on ↓ Total at load

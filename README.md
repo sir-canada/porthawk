@@ -157,8 +157,14 @@ keyed DOM patching, no framework, no build step.
   (red edges) before it fades out — 45 s by default, adjustable under
   Settings → Traffic (0 turns it off).
 - Click column headers to sort; rate/total columns default descending.
-- Click a PID to copy it. Hover a row you own → ✕ (SIGTERM, then `9!`
-  for SIGKILL escalation).
+- Click a PID or an address to copy it — the text flashes green and a
+  bubble names what landed on the clipboard. Hover a row you own → ✕
+  (SIGTERM, then `9!` for SIGKILL escalation).
+- Keyboard: `↑`/`↓` move through the table, `Home`/`End` jump to the ends,
+  `→`/`Enter` expand a group (`→` again steps into it), `←` collapses or
+  jumps out to the group header, `Ctrl-C` copies the highlighted address,
+  `Ctrl-Shift-C` the whole row, `Esc` drops the highlight. Collapsed groups
+  are skipped, since their members aren't on screen.
 - `dns` toggles reverse lookups, `owner` range ownership, `alias` whether
   saved aliases are shown; `pause` freezes display (collection
   continues); green flash = new connection, red flash = closed.
