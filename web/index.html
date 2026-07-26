@@ -145,6 +145,11 @@ tr.ghost td{opacity:.5; font-style:italic; background:rgba(240,113,120,.14)}
 tr.ghost td:first-child{box-shadow:inset 2px 0 0 var(--bad)}
 tr.ghost td:last-child{box-shadow:inset -2px 0 0 var(--bad)}
 tr.ghost:hover td{opacity:.75}
+/* inherited attribution: the kernel gives this socket no owner, so the name
+   is the last process we saw holding this exact 4-tuple. Dimmed and dotted-
+   underlined to say "true of this socket's past, not its present" — the row
+   itself may well be live (a TIME_WAIT is not a ghost). */
+td.inh{opacity:.62; font-style:italic}
 /* keyboard cursor. Declared after .ghost so its edge marker wins on rows
    that are both; background is tinted rather than solid so the ghost and
    flash tints still read through it. */
@@ -259,6 +264,52 @@ tr.hid:hover td{opacity:.8}
 /* the add row reads as a separate act from editing what's already there */
 #panel .rules .addrow input{border-style:dashed}
 #panel .rules .addrow input:focus{border-style:solid}
+/* ---- column drag-reorder ---- */
+/* The drop marker sits on the edge the dragged column would land against,
+   so the pointer's half of the target reads as "before" or "after" without
+   a separate insertion line element. */
+#hdr th.dragging{opacity:.4}
+#hdr th.dropL{box-shadow:inset 3px 0 0 var(--acc)}
+#hdr th.dropR{box-shadow:inset -3px 0 0 var(--acc)}
+/* ---- configure columns dialog ---- */
+/* Shares the settings panel's shape and the same #veil behind it, but is
+   its own dialog: it is reached from the header's right-click menu, not
+   from the gear, and the two can be open independently. */
+#cols{
+  position:fixed; z-index:41; top:50%; left:50%; transform:translate(-50%,-50%);
+  width:min(600px,92vw); max-height:82vh; overflow:auto;
+  background:var(--bg2); border:1px solid var(--line2); border-radius:6px;
+  box-shadow:0 18px 50px rgba(0,0,0,.8);
+}
+#cols.hidden{display:none}
+#cols h2{
+  font:inherit; font-weight:600; color:var(--acc); padding:10px 14px;
+  border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px;
+}
+#cols h2 .x{margin-left:auto; color:var(--dim); cursor:pointer; padding:0 4px}
+#cols h2 .x:hover{color:var(--bad)}
+#cols section{padding:12px 14px; border-bottom:1px solid var(--line)}
+#cols section:last-child{border-bottom:0}
+#cols h3{font:inherit; font-weight:500; color:var(--fg); margin-bottom:3px}
+#cols .hint{color:var(--dimmer); margin-bottom:8px}
+#cols .ci{display:flex; align-items:center; gap:5px; padding:4px 0}
+#cols .ci+.ci{border-top:1px solid var(--line)}
+#cols .ci .nm{color:var(--fg); margin-left:4px}
+#cols .ci .ds{color:var(--dimmer); margin-left:auto; padding-left:12px; text-align:right}
+#cols .ci button{
+  background:none; border:1px solid var(--line2); color:var(--dim);
+  border-radius:3px; cursor:pointer; font:inherit; line-height:1; padding:3px 7px;
+}
+#cols .ci button:hover:not(:disabled){color:var(--acc); border-color:var(--acc)}
+#cols .ci button:disabled{opacity:.25; cursor:default}
+#cols .ci button.rm:hover:not(:disabled){color:var(--bad); border-color:var(--bad)}
+#cols .empty{color:var(--dimmer)}
+#cols .crow{display:flex; gap:8px; justify-content:flex-end}
+#cols .addbtn{
+  background:none; border:1px solid var(--line2); color:var(--dim);
+  padding:3px 10px; border-radius:3px; cursor:pointer; font:inherit;
+}
+#cols .addbtn:hover{color:var(--acc); border-color:var(--acc)}
 /* ---- toast ---- */
 #toast{
   position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(14px);
@@ -349,6 +400,25 @@ tr:hover .kbtn{opacity:.7}
 </div>
 <div id="menu" class="hidden"></div>
 <div id="veil" class="hidden"></div>
+<div id="cols" class="hidden">
+  <h2>Configure columns<span class="x" id="colsx" title="close">✕</span></h2>
+  <section>
+    <h3>Shown</h3>
+    <div class="hint">Top to bottom is left to right. You can also drag a
+      column header in the table itself, or right-click one for the same
+      actions.</div>
+    <div id="colsShown"></div>
+  </section>
+  <section>
+    <h3>Available</h3>
+    <div class="hint">Not currently shown.</div>
+    <div id="colsHidden"></div>
+  </section>
+  <section class="crow">
+    <button class="addbtn" id="colsReset">reset to defaults</button>
+    <button class="addbtn" id="colsDone">done</button>
+  </section>
+</div>
 <div id="panel" class="hidden">
   <h2>settings <span class="x" id="panelx" title="close (Esc)">✕</span></h2>
   <!-- Tabs, because the panel now holds four unrelated jobs and stacking
@@ -497,20 +567,9 @@ tr:hover .kbtn{opacity:.7}
 </div>
 <div id="wrap">
   <table>
-    <thead><tr id="hdr">
-      <th data-k="comm">Process</th>
-      <th data-k="pid" class="num">PID</th>
-      <th data-k="user">User</th>
-      <th data-k="proto">Proto</th>
-      <th data-k="state">State</th>
-      <th data-k="local">Local</th>
-      <th data-k="remote">Remote</th>
-      <th data-k="downRate" class="num">↓ KB/s</th>
-      <th data-k="upRate"   class="num">↑ KB/s</th>
-      <th data-k="down"     class="num">↓ Total</th>
-      <th data-k="up"       class="num">↑ Total</th>
-      <th></th>
-    </tr></thead>
+    <!-- generated from COLDEFS/COLS by renderHeader(); the trailing
+         kill-button column is added there too -->
+    <thead><tr id="hdr"></tr></thead>
     <tbody id="tb"></tbody>
   </table>
   <div id="empty" hidden>no connections match</div>
@@ -668,13 +727,71 @@ function rowVals(c){
     host:c.host||'', owner:c.owner||'', alias:c.alias||'', ip:c.ra||'', noPid:c.noPid||'',
     lhost:c.lhost||'', lowner:c.lowner||'', lalias:c.lalias||'',
     iface:c.if||'', liface:c.lif||'',
+    inherit:!!c.inherit, wasPid:c.wasPid||0,
     // per-connection TCP counters; UDP rows have none (group header
     // carries the per-process numbers, which include UDP)
     downRate:c.downRate||0, upRate:c.upRate||0,
     down:c.down||0, up:c.up||0,
   };
 }
-const COLS=['comm','pid','user','proto','state','local','remote','downRate','upRate','down','up'];
+// ---- columns ----
+// One description per column, and the only place a column is described.
+// The header cells, the body cells, the group headers, the resize handles
+// and the configure dialog are all generated from this — they used to be
+// five hand-maintained lists that agreed with each other by luck.
+//
+// num  right-aligns and sorts numerically (see NUMS)
+// span lets a group header's summary run through this column
+const COLDEFS={
+  comm:    {label:'Process',    desc:'process name, or the app it belongs to'},
+  pid:     {label:'PID',        desc:'process id', num:true},
+  user:    {label:'User',       desc:'user the socket is owned by'},
+  proto:   {label:'Proto',      desc:'tcp, tcp6, udp, udp6'},
+  state:   {label:'State',      desc:'TCP state, or DISCONNECTED for a ghost'},
+  local:   {label:'Local',      desc:'local address and port'},
+  remote:  {label:'Remote',     desc:'peer address and port'},
+  downRate:{label:'↓ KB/s',     desc:'current download rate', num:true},
+  upRate:  {label:'↑ KB/s',     desc:'current upload rate', num:true},
+  down:    {label:'↓ Total',    desc:'bytes received on this connection', num:true},
+  up:      {label:'↑ Total',    desc:'bytes sent on this connection', num:true},
+  // Off by default. Most of these are already shown folded into Local or
+  // Remote, or in their tooltips; a column promotes one to something you
+  // can sort and scan down.
+  app:     {label:'App',        desc:'recognizable app name, when it differs from the process'},
+  host:    {label:'Remote host',desc:'reverse DNS of the peer'},
+  owner:   {label:'Remote owner',desc:'who the peer IP range is registered to (RDAP)'},
+  alias:   {label:'Alias',      desc:'your own name for the peer address'},
+  cc:      {label:'Country',    desc:'ISO country code of the peer'},
+  ip:      {label:'Remote IP',  desc:'peer address, never a name'},
+  iface:   {label:'Adapter',    desc:'local network adapter for the peer-facing address'},
+  lhost:   {label:'Local host', desc:'reverse DNS of the local address'},
+  lowner:  {label:'Local owner',desc:'registered owner of the local address'},
+  lalias:  {label:'Local alias',desc:'your own name for the local address'},
+};
+const ALLCOLS=Object.keys(COLDEFS);
+// Columns patchRow dresses by hand — classes, tooltips, child spans, rate
+// bars. Everything else is plain text straight out of rowVals.
+const BESPOKE=new Set(['comm','pid','user','proto','state','local','remote',
+                       'downRate','upRate','down','up']);
+const PLAINCOLS=ALLCOLS.filter(k=>!BESPOKE.has(k));
+const DEFAULT_COLS=['comm','pid','user','proto','state','local','remote','downRate','upRate','down','up'];
+const COLS_KEY='porthawk.cols';
+// Filtered against COLDEFS on load: a stored layout from an older build can
+// name a column that no longer exists, and one unknown key should not cost
+// the user the rest of their layout.
+function loadColLayout(){
+  try{
+    const a=JSON.parse(localStorage.getItem(COLS_KEY)||'null');
+    if(Array.isArray(a)){
+      const seen=new Set(), out=[];
+      for(const k of a) if(COLDEFS[k]&&!seen.has(k)){seen.add(k);out.push(k);}
+      if(out.length)return out;
+    }
+  }catch(e){}
+  return DEFAULT_COLS.slice();
+}
+let COLS=loadColLayout();
+function saveColLayout(){ localStorage.setItem(COLS_KEY,JSON.stringify(COLS)); }
 
 // Why a row has no process. "noproc" is the common, harmless one: the
 // kernel drops the socket's owner when it goes to TIME_WAIT, and reports
@@ -693,8 +810,24 @@ const NOPID={
          'never anything to exit.',
   gone:  'The owning process exited while this scan was running. The name '+
          'shown, if any, is the one this socket had on its last attributed '+
-         'tick — the PID is not carried over, because that process is gone.',
+         'tick.',
 };
+
+// Explains a row whose name came from memory rather than from the kernel
+// this tick. Both halves matter: which process, and whether that process is
+// still around — because that is exactly the difference between a PID you
+// can act on and a number that would be a lie.
+function inheritTitle(c){
+  const who=c.app||c.comm||'an unknown process';
+  const head='No process owns this socket now. It was opened by '+who;
+  if(c.wasPid)
+    return head+' (pid '+c.wasPid+'), which has since exited — so no PID is '+
+      'shown: that number is either gone or now belongs to something else.\n\n'+
+      (NOPID[c.noPid]||'');
+  return head+', which is still running as pid '+c.pid+' — so the PID is '+
+    'shown and can be acted on, but this particular socket is no longer '+
+    'attached to it.\n\n'+(NOPID[c.noPid]||'');
+}
 
 // One-shot flash: add class now, remove after the hold; the CSS
 // transition then fades it out. Timer-driven, so DOM re-insertion
@@ -776,7 +909,13 @@ function makeRow(c){
   tr._id=c.id;
   if(!firstSnap && c.state!=='DISCONNECTED')flash(tr); // new conns only; never green-flash a ghost
   const tds={};
-  for(const k of COLS){
+  // A cell is built for every known column, not just the visible ones, and
+  // only the visible ones are appended. patchRow can then write to t.local
+  // or t.comm unconditionally: a hidden column's cell is a real element
+  // that simply is not in the document. The cost is a few detached nodes
+  // per row; the alternative is an "is this column showing?" branch in
+  // front of every line of the hot path.
+  for(const k of ALLCOLS){
     const td=document.createElement('td');
     if(k==='comm'){td.className='comm';
       td.oncontextmenu=e=>{e.preventDefault();openProcMenu(e,tr._id);};}
@@ -796,9 +935,10 @@ function makeRow(c){
     else if(k==='downRate'||k==='upRate'){td.className='rate num';
       const b=document.createElement('div');b.className='bar';td.appendChild(b);
       const s=document.createElement('span');td.appendChild(s);}
-    else if(k==='down'||k==='up')td.className='num';
-    tds[k]=td; tr.appendChild(td);
+    else if(COLDEFS[k].num)td.className='num';
+    tds[k]=td;
   }
+  for(const k of COLS)tr.appendChild(tds[k]);
   const kc=document.createElement('td'); kc.className='kill';
   tr.appendChild(kc); tds._kill=kc;
   // Clicking a row moves the keyboard cursor there, so mouse and keyboard
@@ -826,7 +966,12 @@ function patchRow(r,c){
   setTxt(t.proto,v.proto);
   // An unattributed row is either harmless or a missing capability, and
   // the two look identical ("—", no PID, user root). Say which.
-  t.comm.title=c.pid<0?NOPID[c.noPid]||'no process attached to this socket':'';
+  t.comm.title=c.inherit?inheritTitle(c)
+              :c.pid<0?NOPID[c.noPid]||'no process attached to this socket':'';
+  // Dim the name and the number when they are remembered rather than
+  // observed, so an inherited label never reads as a live attribution.
+  t.comm.classList.toggle('inh',!!c.inherit);
+  t.pid.classList.toggle('inh',!!c.inherit);
   if(t.state.textContent!==v.state){t.state.textContent=v.state;t.state.className='state '+v.state;}
   r.el.classList.toggle('ghost',c.state==='DISCONNECTED');
   setTxt(t.local,v.local);
@@ -852,6 +997,7 @@ function patchRow(r,c){
   t.remote.title=(known?known+'\n':'')+'click: copy '+(c.ra||'IP')+' · right-click: alias / hide';
   rate(t.downRate,v.downRate); rate(t.upRate,v.upRate);
   setTxt(t.down,fmtTot(v.down)); setTxt(t.up,fmtTot(v.up));
+  for(const k of PLAINCOLS)setTxt(t[k],String(v[k]||''));
   killBtn(r,c);
   r.data={c,v};
 }
@@ -1134,8 +1280,14 @@ function closePanel(){
 }
 $('#gear').onclick=()=>panelOpen?closePanel():openPanel();
 $('#panelx').onclick=closePanel;
-$('#veil').onclick=closePanel;
-addEventListener('keydown',e=>{if(e.key==='Escape'&&panelOpen)closePanel();});
+// The veil sits behind both dialogs, so clicking it dismisses whichever
+// are open rather than assuming the settings panel.
+$('#veil').onclick=()=>{ if(colsOpen)closeColsDialog(); if(panelOpen)closePanel(); };
+addEventListener('keydown',e=>{
+  if(e.key!=='Escape')return;
+  if(colsOpen){ closeColsDialog(); return; }   // topmost first
+  if(panelOpen)closePanel();
+});
 
 // A rule edit is only committed on blur or Enter — not per keystroke, which
 // would write the file on every character and fight the redraw.
@@ -1611,7 +1763,13 @@ const cmp=(a,b)=>a<b?-1:a>b?1:0;
 // better starting point than any table of guesses. After that the widths
 // are the user's: drag a header edge to change one, and the pair either
 // side of that edge trade width so the total never changes.
-const COLW_KEY='porthawk.colw';
+// v2 is keyed by column name. The v1 key held a bare array indexed by
+// position, which was fine while the column set was fixed and becomes wrong
+// the moment it is not: hide one column and every stored width shifts onto
+// its neighbour. The old key is left where it is rather than migrated —
+// there is nothing in it worth carrying, since the first measurement after
+// the session settles is a better starting point anyway.
+const COLW_KEY='porthawk.colw2';
 const KILLW=2.6;                       // % reserved for the kill button column
 const MINW=0.02;                       // no column below 2% of the table
 const tableEl=()=>document.querySelector('table');
@@ -1620,9 +1778,12 @@ function colGroup(){
   let cg=table.querySelector(':scope > colgroup');
   if(!cg){
     cg=document.createElement('colgroup');
-    for(let i=0;i<=COLS.length;i++)cg.appendChild(document.createElement('col'));
     table.insertBefore(cg,table.firstChild);
   }
+  // Kept in step with the visible column count, which now changes at runtime.
+  const want=COLS.length+1;            // +1 for the kill column
+  while(cg.children.length>want)cg.removeChild(cg.lastChild);
+  while(cg.children.length<want)cg.appendChild(document.createElement('col'));
   return cg;
 }
 function applyCols(){
@@ -1643,8 +1804,30 @@ function measureCols(){
   if(w.some(n=>!(n>0)))return false;
   colW=w; return true;
 }
+function loadColWMap(){
+  try{
+    const o=JSON.parse(localStorage.getItem(COLW_KEY)||'null');
+    return o&&typeof o==='object'&&!Array.isArray(o)?o:null;
+  }catch(e){ return null; }
+}
+// Merged into whatever is already stored, so widths for columns that are
+// currently hidden survive being hidden and come back with them.
 function saveCols(){
-  if(colW)localStorage.setItem(COLW_KEY,JSON.stringify(colW.map(n=>+n.toFixed(3))));
+  if(!colW)return;
+  const m=loadColWMap()||{};
+  COLS.forEach((k,i)=>{ if(colW[i]>0)m[k]=+colW[i].toFixed(3); });
+  localStorage.setItem(COLW_KEY,JSON.stringify(m));
+}
+// A column with no stored width takes the average of the ones that have
+// one. applyCols normalises the total afterwards, so a newly added column
+// gets a sane share without discarding everyone else's widths — which is
+// what starting over from a fresh measurement would do.
+function colWFromStore(){
+  const m=loadColWMap(); if(!m)return null;
+  const have=COLS.map(k=>m[k]).filter(n=>typeof n==='number'&&n>0);
+  if(!have.length)return null;
+  const avg=have.reduce((a,b)=>a+b,0)/have.length;
+  return COLS.map(k=>(typeof m[k]==='number'&&m[k]>0)?m[k]:avg);
 }
 function lockColumns(){
   if(colsLocked)return;
@@ -1719,27 +1902,263 @@ function makeRateTd(){
   const s=document.createElement('span'); td.appendChild(s);
   return td;
 }
+// ---- header, column reorder, column configuration ----
+// The header is generated from COLS, so adding or moving a column is a
+// re-render rather than an edit to markup that has to be kept in step by
+// hand. #hdr itself is never replaced, only its children, so the click and
+// contextmenu handlers bound to it once at load keep working.
+function renderHeader(){
+  const hdr=$('#hdr');
+  hdr.textContent='';
+  for(const k of COLS){
+    const d=COLDEFS[k];
+    const th=document.createElement('th');
+    th.dataset.k=k;
+    th.textContent=d.label;
+    if(d.num)th.className='num';
+    th.title=d.desc+'\nclick: sort · drag: reorder · right-click: columns';
+    th.draggable=true;
+    th.addEventListener('dragstart',onColDragStart);
+    th.addEventListener('dragover',onColDragOver);
+    th.addEventListener('dragleave',onColDragLeave);
+    th.addEventListener('drop',onColDrop);
+    th.addEventListener('dragend',onColDragEnd);
+    hdr.appendChild(th);
+  }
+  hdr.appendChild(document.createElement('th'));   // kill button column
+  // Bring the colgroup along with the header rather than leaving it to
+  // applyCols: on the path where widths have to be re-measured, applyCols
+  // does not run until a timer fires, and until then the col elements
+  // describe the old column count.
+  colGroup();
+  addResizers();
+  markSortArrow();
+}
+function markSortArrow(){
+  document.querySelectorAll('#hdr th .arr').forEach(a=>a.remove());
+  const th=document.querySelector('#hdr th[data-k="'+sortK+'"]');
+  if(!th)return;
+  const a=document.createElement('span'); a.className='arr';
+  a.textContent=sortDir>0?'▲':'▼';
+  th.appendChild(a);
+}
+function setSort(k,dir){ sortK=k; sortDir=dir; markSortArrow(); render(); }
+
+let dragCol=null;
+function onColDragStart(e){
+  // The resize handle stops mousedown from propagating, so dragging an edge
+  // never starts a column drag — the two gestures share the header but not
+  // the same few pixels.
+  dragCol=this.dataset.k;
+  e.dataTransfer.effectAllowed='move';
+  try{ e.dataTransfer.setData('text/plain',dragCol); }catch(err){} // Firefox wants a payload
+  this.classList.add('dragging');
+}
+function onColDragOver(e){
+  if(!dragCol||this.dataset.k===dragCol)return;
+  e.preventDefault();
+  e.dataTransfer.dropEffect='move';
+  // Which half of the target the pointer is over decides whether the column
+  // lands before or after it, so a drop is never ambiguous about direction.
+  const r=this.getBoundingClientRect();
+  const after=e.clientX>r.left+r.width/2;
+  this.classList.toggle('dropL',!after);
+  this.classList.toggle('dropR',after);
+}
+function onColDragLeave(){ this.classList.remove('dropL','dropR'); }
+function onColDrop(e){
+  e.preventDefault();
+  const onto=this.dataset.k, after=this.classList.contains('dropR');
+  this.classList.remove('dropL','dropR');
+  if(!dragCol||!onto||dragCol===onto)return;
+  const next=COLS.filter(c=>c!==dragCol);
+  const i=next.indexOf(onto);
+  if(i<0)return;
+  next.splice(after?i+1:i,0,dragCol);
+  setColumns(next);
+}
+function onColDragEnd(){
+  dragCol=null;
+  document.querySelectorAll('#hdr th')
+    .forEach(t=>t.classList.remove('dragging','dropL','dropR'));
+}
+
+// Every column change goes through here. The header, the cached row and
+// group-header elements, the colgroup and the stored widths all have to
+// move together: the caches are keyed by connection id and group name, so
+// nothing in them would otherwise notice that a column had appeared.
+function setColumns(next){
+  if(!next.length)return;              // a table with no columns is not a state to allow
+  COLS=next;
+  saveColLayout();
+  // Sorting by a column that is no longer shown leaves no arrow and no way
+  // to change it back from the header.
+  if(!COLS.includes(sortK)){ sortK=COLS[0]; sortDir=1; }
+  rows.clear(); ghdrs.clear(); tb.textContent='';
+  colsLocked=false;
+  colW=colWFromStore();
+  renderHeader();
+  if(colW){ applyCols(); colsLocked=true; }
+  else{
+    // Nothing stored yet: let the browser lay it out, then adopt that.
+    tableEl().style.tableLayout='auto';
+    setTimeout(lockColumns,60);
+  }
+  render();
+  if(colsOpen)drawColsDialog();
+}
+function addColumn(k,near){
+  const next=COLS.slice();
+  const i=near?next.indexOf(near):-1;
+  next.splice(i<0?next.length:i+1,0,k);   // lands next to the column you clicked
+  setColumns(next);
+}
+function removeColumn(k){
+  if(COLS.length<2)return;
+  setColumns(COLS.filter(c=>c!==k));
+}
+function resetColumns(){
+  localStorage.removeItem(COLS_KEY);
+  localStorage.removeItem(COLW_KEY);
+  setColumns(DEFAULT_COLS.slice());
+}
+
+$('#hdr').oncontextmenu=e=>{
+  const th=e.target.closest('th');
+  const k=th&&th.dataset.k;
+  e.preventDefault();
+  const items=[];
+  if(k){
+    const asc=sortK===k&&sortDir>0, desc=sortK===k&&sortDir<0;
+    items.push({label:(asc?'✓ ':'')+'sort ascending',  fn:()=>setSort(k,1)});
+    items.push({label:(desc?'✓ ':'')+'sort descending',fn:()=>setSort(k,-1)});
+    items.push({sep:true});
+    if(COLS.length>1)
+      items.push({label:'hide "'+COLDEFS[k].label+'"',fn:()=>removeColumn(k),cls:'warn'});
+  }
+  // Adding lives in the dialog, not here: the list of columns you are not
+  // showing is long, and pasting all of it into the menu buries the four
+  // things you actually right-click a header for.
+  items.push({sep:true});
+  items.push({label:'edit columns…',fn:openColsDialog});
+  items.push({label:'reset columns',fn:resetColumns});
+  showMenu(e,items,k?COLDEFS[k].label:'columns');
+};
+
+let colsOpen=false;
+function openColsDialog(){
+  colsOpen=true;
+  $('#veil').classList.remove('hidden');
+  $('#cols').classList.remove('hidden');
+  drawColsDialog();
+}
+function closeColsDialog(){
+  colsOpen=false;
+  $('#cols').classList.add('hidden');
+  // The veil is shared with the settings panel, so it only goes when
+  // nothing is left behind it.
+  if(!panelOpen)$('#veil').classList.add('hidden');
+}
+function colBtn(txt,title,disabled,fn){
+  const b=document.createElement('button');
+  b.textContent=txt; b.title=title; b.disabled=!!disabled; b.onclick=fn;
+  return b;
+}
+function colRow(k,ctrls){
+  const d=COLDEFS[k];
+  const row=document.createElement('div'); row.className='ci';
+  for(const c of ctrls)row.appendChild(c);
+  const nm=document.createElement('span'); nm.className='nm'; nm.textContent=d.label;
+  const ds=document.createElement('span'); ds.className='ds'; ds.textContent=d.desc;
+  row.appendChild(nm); row.appendChild(ds);
+  return row;
+}
+function moveColTo(from,to){
+  const n=COLS.slice(); const [k]=n.splice(from,1); n.splice(to,0,k);
+  setColumns(n);
+}
+function drawColsDialog(){
+  const shown=$('#colsShown'); shown.textContent='';
+  COLS.forEach((k,i)=>{
+    const first=i===0, last=i===COLS.length-1;
+    shown.appendChild(colRow(k,[
+      colBtn('⇈','move to front',first,()=>moveColTo(i,0)),
+      colBtn('↑','move up',      first,()=>moveColTo(i,i-1)),
+      colBtn('↓','move down',    last, ()=>moveColTo(i,i+1)),
+      colBtn('⇊','move to end',  last, ()=>moveColTo(i,COLS.length-1)),
+      (()=>{const b=colBtn('✕','remove column',COLS.length<2,()=>removeColumn(k));
+            b.className='rm'; return b;})(),
+    ]));
+  });
+  const box=$('#colsHidden'); box.textContent='';
+  const hidden=ALLCOLS.filter(c=>!COLS.includes(c));
+  if(!hidden.length){
+    const e=document.createElement('div'); e.className='empty';
+    e.textContent='every column is shown';
+    box.appendChild(e);
+    return;
+  }
+  for(const k of hidden)
+    box.appendChild(colRow(k,[colBtn('+','add column',false,()=>addColumn(k))]));
+}
+$('#colsx').onclick=closeColsDialog;
+$('#colsDone').onclick=closeColsDialog;
+$('#colsReset').onclick=resetColumns;
+
+// A group header's summary line ("3 outgoing · 1 listening") lives where the
+// addresses would be. With Local and Remote both showing and adjacent it
+// spans the pair, as it always has; separated, reordered or half-hidden it
+// takes whichever comes first and the other stays blank. Getting this wrong
+// does not just look untidy — a stale colSpan shifts every cell to its right
+// one column over, so the group's numbers line up under the wrong headings.
+function layoutGroupRow(tr,tds){
+  while(tr.firstChild)tr.removeChild(tr.firstChild);
+  const li=COLS.indexOf('local'), ri=COLS.indexOf('remote');
+  const merge=li>=0&&ri>=0&&Math.abs(li-ri)===1;
+  const sum=li>=0&&ri>=0?COLS[Math.min(li,ri)]:(li>=0?'local':(ri>=0?'remote':null));
+  for(const k of COLS){
+    const td=tds[k];
+    td.colSpan=1;
+    if(merge&&k!==sum&&(k==='local'||k==='remote'))continue; // folded into the span
+    if(merge&&k===sum)td.colSpan=2;
+    // _gcls is the cell's base class, captured the first time we lay it out
+    // rather than required up front: the rate cells arrive from makeRateTd
+    // already carrying "rate num", and defaulting a missing _gcls to "" once
+    // silently stripped their right-alignment and their bar.
+    if(td._gcls===undefined)td._gcls=td.className;
+    const cls=k===sum?'gconns':td._gcls;
+    if(td.className!==cls)td.className=cls;
+    tr.appendChild(td);
+  }
+  tr.appendChild(tds.kill);
+  // Detached spare when neither address column is showing, so the writer
+  // below stays unconditional.
+  tds.conns=sum?tds[sum]:document.createElement('td');
+}
+
 function groupHeader(g,open){
   let h=ghdrs.get(g.key);
   if(!h){
     const tr=document.createElement('tr'); tr.className='grp';
     const tds={};
-    const mk=(cls,span)=>{const td=document.createElement('td');
-      if(cls)td.className=cls; if(span)td.colSpan=span;
-      tr.appendChild(td); return td;};
-    tds.comm =mk('comm');
-    tds.pid  =mk('pid num');
+    const mk=(k,cls)=>{const td=document.createElement('td');
+      td._gcls=cls||''; tds[k]=td; return td;};
+    mk('comm','comm');
+    mk('pid','pid num');
     tds.pid.title='click: copy PID';
     tds.pid.onclick=e=>{e.stopPropagation(); copyText(tds.pid.textContent,tds.pid);};
-    tds.user =mk('user');
-    tds.proto=mk('');
-    tds.state=mk('state');
-    tds.conns=mk('gconns',2);       // spans Local + Remote
-    tds.dr=makeRateTd(); tr.appendChild(tds.dr);
-    tds.ur=makeRateTd(); tr.appendChild(tds.ur);
-    tds.down =mk('num');
-    tds.up   =mk('num');
-    tds.kill =mk('kill');
+    mk('user','user');
+    mk('proto','');
+    mk('state','state');
+    mk('local','');
+    mk('remote','');
+    tds.downRate=tds.dr=makeRateTd();
+    tds.upRate  =tds.ur=makeRateTd();
+    mk('down','num');
+    mk('up','num');
+    for(const k of PLAINCOLS)mk(k,'');
+    tds.kill=document.createElement('td'); tds.kill.className='kill';
+    layoutGroupRow(tr,tds);
     const key=g.key;
     tr._gkey=key;
     tr.onclick=()=>{
@@ -1845,22 +2264,32 @@ function moveCur(d){
 }
 // Ctrl-Shift-C: the whole row as one tab-separated line, for pasting
 // somewhere that wants the context and not just the address.
+// Follows the visible columns, in their order: what you copy is what you
+// are looking at. Hiding a column you do not care about also takes it out
+// of the paste, which is most of the reason to hide one.
+function cellText(v,k){
+  if(k==='downRate'||k==='upRate')return fmtRate(v[k]);
+  if(k==='down'||k==='up')return fmtTot(v[k]);
+  return String(v[k]==null?'':v[k]);
+}
 function rowLine(r){
   const v=r.data.v;
-  return [v.comm,v.pid,v.user,v.proto,v.state,v.local,v.remote,
-    fmtRate(v.downRate),fmtRate(v.upRate),fmtTot(v.down),fmtTot(v.up)]
-    .map(x=>String(x==null?'':x)).join('\t');
+  return COLS.map(k=>cellText(v,k)).join('\t');
 }
-// Same shape for a group header, straight off its cells: a group has no
-// connection record behind it, only the aggregate on screen. The Local +
-// Remote pair is one merged cell there ("3 outgoing · 1 listening"), so
-// it fills both columns.
+// Same shape for a group header, but read off its cells: a group has no
+// connection record behind it, only the aggregate on screen. Where Local
+// and Remote are merged into the one summary cell, the summary lands in
+// whichever of the two comes first and the other is blank — matching how
+// the row is actually laid out.
 const grpName=t=>t.comm.textContent.replace(/^[▾▸]\s*/,'');
 function grpLine(t){
-  return [grpName(t),t.pid.textContent,t.user.textContent,t.proto.textContent,
-    t.state.textContent,t.conns.textContent,'',
-    t.dr.lastChild.textContent,t.ur.lastChild.textContent,
-    t.down.textContent,t.up.textContent].join('\t');
+  return COLS.map(k=>{
+    if(k==='comm')return grpName(t);
+    if(k==='downRate')return t.dr.lastChild.textContent;
+    if(k==='upRate')return t.ur.lastChild.textContent;
+    if(k==='local'||k==='remote')return t[k]===t.conns?t.conns.textContent:'';
+    return t[k]?t[k].textContent:'';
+  }).join('\t');
 }
 
 function applySeq(seq){
@@ -1932,9 +2361,7 @@ $('#hdr').onclick=e=>{
   const th=e.target.closest('th'); if(!th||!th.dataset.k)return;
   const k=th.dataset.k;
   if(sortK===k)sortDir=-sortDir; else {sortK=k;sortDir=['downRate','upRate','down','up'].includes(k)?-1:1;}
-  document.querySelectorAll('#hdr th .arr').forEach(a=>a.remove());
-  const a=document.createElement('span');a.className='arr';a.textContent=sortDir>0?'▲':'▼';
-  th.appendChild(a);
+  markSortArrow();
   render();
 };
 
@@ -2115,21 +2542,11 @@ document.addEventListener('keydown',e=>{
 // doesn't visibly re-lay the table out; without them, the measurement
 // after the session settles supplies the first set.
 (()=>{
-  addResizers();
-  let a=null;
-  try{ a=JSON.parse(localStorage.getItem(COLW_KEY)||'null'); }catch(e){}
-  if(Array.isArray(a)&&a.length===COLS.length&&a.every(n=>typeof n==='number'&&n>0)){
-    colW=a; applyCols(); colsLocked=true;
-  }
+  renderHeader();
+  const a=colWFromStore();
+  if(a){ colW=a; applyCols(); colsLocked=true; }
 })();
 
-// show the default sort arrow on ↓ Total at load
-(()=>{
-  const th=document.querySelector('#hdr th[data-k="'+sortK+'"]');
-  if(!th)return;
-  const a=document.createElement('span'); a.className='arr';
-  a.textContent=sortDir>0?'▲':'▼'; th.appendChild(a);
-})();
 </script>
 </body>
 </html>
