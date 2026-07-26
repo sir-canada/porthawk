@@ -101,12 +101,28 @@ func TestClampGhostTTL(t *testing.T) {
 	}
 }
 
+// fakeProcs installs a stubbed process table for the duration of a test:
+// pid -> start time, absent means the pid does not exist.
+func fakeProcs(t *testing.T, procs map[int]uint64) {
+	t.Helper()
+	orig := procStart
+	procStart = func(pid int) (uint64, bool) {
+		st, ok := procs[pid]
+		return st, ok
+	}
+	t.Cleanup(func() { procStart = orig })
+}
+
 // A process exits, its socket outlives it by a tick, and that unattributed
 // tick is what gets promoted to a ghost — so without carrying the name
 // across, every corpse is anonymous.
 func TestGhostKeepsNameOfExitedProcess(t *testing.T) {
+	procs := map[int]uint64{42: 1000}
+	fakeProcs(t, procs)
+
 	g := NewGhosts(time.Minute)
 	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave", App: "Brave"}})
+	delete(procs, 42) // owner exits
 
 	// Same socket, owner exited: kernel reports it with no pid.
 	out := g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: -1, NoPID: "gone"}})
@@ -114,7 +130,10 @@ func TestGhostKeepsNameOfExitedProcess(t *testing.T) {
 		t.Fatalf("name should survive the owner exiting, got %+v", out)
 	}
 	if out[0].PID != -1 {
-		t.Fatalf("PID must not be carried over, got %d", out[0].PID)
+		t.Fatalf("dead owner's PID must not reach the PID column, got %d", out[0].PID)
+	}
+	if out[0].WasPID != 42 || !out[0].Inherit {
+		t.Fatalf("former PID should be recorded as WasPID and flagged inherited, got %+v", out[0])
 	}
 
 	// And it is still there once the socket goes and the row is a ghost.
@@ -124,11 +143,105 @@ func TestGhostKeepsNameOfExitedProcess(t *testing.T) {
 	}
 }
 
-// "gone" is the only reason that means "this socket had an owner and it
-// exited". The others are different questions, and an old label answers
-// none of them.
+// TIME_WAIT is the volume case: the kernel keeps no process for these, but the
+// 4-tuple is the same one that was ESTABLISHED a second earlier, so the owner
+// is known by identity rather than guessed.
+func TestTimeWaitInheritsOwner(t *testing.T) {
+	procs := map[int]uint64{42: 1000}
+	fakeProcs(t, procs)
+
+	g := NewGhosts(time.Minute)
+	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave", App: "Brave"}})
+	out := g.Track([]Conn{{ID: "a", State: "TIME_WAIT", PID: -1, NoPID: "noproc"}})
+	if len(out) != 1 || out[0].Comm != "brave" || !out[0].Inherit {
+		t.Fatalf("TIME_WAIT should inherit its opener, got %+v", out)
+	}
+	// Owner still running, so the PID is real and usable.
+	if out[0].PID != 42 {
+		t.Fatalf("live owner's PID should be restored, got %d", out[0].PID)
+	}
+}
+
+// A PID recycled onto a different process must not be offered as this
+// socket's owner: same number, different start time, different process.
+func TestInheritedPIDRejectsRecycledNumber(t *testing.T) {
+	procs := map[int]uint64{42: 1000}
+	fakeProcs(t, procs)
+
+	g := NewGhosts(time.Minute)
+	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave"}})
+	procs[42] = 2000 // brave exits, something unrelated gets PID 42
+
+	out := g.Track([]Conn{{ID: "a", State: "TIME_WAIT", PID: -1, NoPID: "noproc"}})
+	if len(out) != 1 || out[0].Comm != "brave" {
+		t.Fatalf("name should still be carried, got %+v", out)
+	}
+	if out[0].PID != -1 || out[0].WasPID != 42 {
+		t.Fatalf("recycled PID must not be presented as the owner, got %+v", out[0])
+	}
+}
+
+// A ghost is promoted carrying a live PID; the owner then dies during the
+// ghost window. The number has to be demoted on the tick that happens.
+func TestGhostDemotesPIDWhenOwnerDiesDuringWindow(t *testing.T) {
+	procs := map[int]uint64{42: 1000}
+	fakeProcs(t, procs)
+
+	g := NewGhosts(time.Minute)
+	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave"}})
+
+	out := g.Track(nil) // socket gone, promoted to ghost, owner still alive
+	if len(out) != 1 || out[0].PID != 42 {
+		t.Fatalf("ghost of a still-running process should keep its PID, got %+v", out)
+	}
+
+	delete(procs, 42)
+	out = g.Track(nil)
+	if len(out) != 1 || out[0].PID != -1 || out[0].WasPID != 42 {
+		t.Fatalf("ghost should demote the PID once the owner exits, got %+v", out)
+	}
+}
+
+// Resolve runs over the live set, and a ghost has left it — so a row promoted
+// without a name used to carry "—" for its whole window even though the memo
+// held the answer throughout. The retry has to happen on the ghost side.
+func TestGhostResolvesNameAfterPromotion(t *testing.T) {
+	procs := map[int]uint64{42: 1000}
+	fakeProcs(t, procs)
+
+	g := NewGhosts(time.Minute)
+	g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "python3", App: "python3 ⟨newco-revenue⟩"}})
+
+	// The owner exits and the scanner cannot say who it was, so the row that
+	// gets promoted is the anonymous one.
+	delete(procs, 42)
+	g.owners.mu.Lock()
+	memo := g.owners.m["a"]
+	g.owners.mu.Unlock()
+	anon := Conn{ID: "a", State: "ESTABLISHED", PID: -1, NoPID: "gone"}
+	g.mu.Lock()
+	g.prev["a"] = anon // as if Resolve had missed it on the live tick
+	g.mu.Unlock()
+
+	out := g.Track(nil)
+	if len(out) != 1 || out[0].State != "DISCONNECTED" {
+		t.Fatalf("expected one ghost, got %+v", out)
+	}
+	if out[0].Comm != "python3" || out[0].App != memo.app {
+		t.Fatalf("ghost should recover its name from the memo, got %+v", out[0])
+	}
+	if out[0].PID != -1 || out[0].WasPID != 42 || !out[0].Inherit {
+		t.Fatalf("dead owner's PID belongs in WasPID, got %+v", out[0])
+	}
+}
+
+// "denied" and "kernel" are different questions, and an old label answers
+// neither: one has an owner we were refused, the other never had one at all.
 func TestGhostDoesNotInventNames(t *testing.T) {
-	for _, reason := range []string{"denied", "noproc", "kernel", ""} {
+	for _, reason := range []string{"denied", "kernel", ""} {
+		procs := map[int]uint64{42: 1000}
+		fakeProcs(t, procs)
+
 		g := NewGhosts(time.Minute)
 		g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: 42, Comm: "brave"}})
 		out := g.Track([]Conn{{ID: "a", State: "ESTABLISHED", PID: -1, NoPID: reason}})

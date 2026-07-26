@@ -18,10 +18,11 @@ const (
 // runs on every tick — even with no browser open — so a connection that
 // dies the instant you open the UI is already a ghost by the first paint.
 type Ghosts struct {
-	mu   sync.Mutex
-	ttl  time.Duration    // how long a ghost lingers; 0 disables ghosting
-	prev map[string]Conn  // live conns from the previous tick
-	dead map[string]ghost // id -> ghost currently held
+	mu     sync.Mutex
+	ttl    time.Duration    // how long a ghost lingers; 0 disables ghosting
+	prev   map[string]Conn  // live conns from the previous tick
+	dead   map[string]ghost // id -> ghost currently held
+	owners *LastOwners      // 4-tuple -> last process seen owning it
 }
 
 type ghost struct {
@@ -31,9 +32,10 @@ type ghost struct {
 
 func NewGhosts(ttl time.Duration) *Ghosts {
 	return &Ghosts{
-		ttl:  clampGhostTTL(ttl),
-		prev: map[string]Conn{},
-		dead: map[string]ghost{},
+		ttl:    clampGhostTTL(ttl),
+		prev:   map[string]Conn{},
+		dead:   map[string]ghost{},
+		owners: NewLastOwners(),
 	}
 }
 
@@ -75,27 +77,38 @@ func (g *Ghosts) Track(live []Conn) []Conn {
 	for _, c := range live {
 		liveIDs[c.ID] = true
 	}
+	// Remember who owns what, then hand names back to the sockets the kernel
+	// has stopped attributing. Record runs first so a socket that loses its
+	// owner this very tick is resolved from an entry written moments ago.
+	g.owners.Record(live, now)
+
 	// The kernel drops a socket's owner the moment the process exits, but
 	// the socket outlives it by a tick or more — and then the row is
 	// promoted to a ghost from that last, already-stripped copy. The result
 	// was that a connection kept its name right up until it died and then
 	// lost it, which is precisely backwards: the corpse is the row you most
-	// want a name on. So carry the name across from the previous tick.
+	// want a name on. So carry the attribution across from LastOwners.
 	//
-	// Only for "gone", which is the one reason that means "this socket had
-	// an owner and that owner exited" — an inode we were refused, one the
-	// kernel never gave an owner, and one that never had a name are all
-	// different questions, and none of them are answered by an old label.
-	// The PID is not carried: that number belongs to a process that is not
-	// there any more, and pasting it into kill(1) would be a lie.
+	// Two of the four reasons are answerable this way, and two are not:
+	//
+	//   "gone"   the owner existed and exited. The socket is the same socket.
+	//   "noproc" TIME_WAIT and friends: the kernel keeps no process for these,
+	//            but a TIME_WAIT socket is the *same 4-tuple* that was
+	//            ESTABLISHED a second earlier, so the memo is an identity
+	//            match rather than a guess. This is the common case by volume
+	//            and the one that leaves a screen full of anonymous rows.
+	//
+	//   "denied" we were refused the owner's fds. The owner is right there and
+	//            readable in principle; papering over that with an old label
+	//            hides a live permissions problem instead of reporting it.
+	//   "kernel" no process holds it and none ever did. There is nothing to
+	//            carry, and inventing one would be a fiction.
 	for i := range live {
 		c := &live[i]
-		if c.Comm != "" || c.NoPID != "gone" {
+		if c.Comm != "" || (c.NoPID != "gone" && c.NoPID != "noproc") {
 			continue
 		}
-		if p, ok := g.prev[c.ID]; ok && p.Comm != "" {
-			c.Comm, c.App = p.Comm, p.App
-		}
+		g.owners.Resolve(c)
 	}
 	// Ghosting turned off: drop anything still held and keep the prev set
 	// current, so turning it back on starts diffing from this tick instead
@@ -132,6 +145,23 @@ func (g *Ghosts) Track(live []Conn) []Conn {
 			delete(g.dead, id)
 			continue
 		}
+		// Resolve runs over the live set, and a ghost has by definition left
+		// it — so a row promoted without a name never got a second chance at
+		// one, and carried "—" for the whole window even when the memo held
+		// the answer the entire time. Retry here. The memo outlives the
+		// socket by design, and the miss at promotion is often a matter of
+		// ordering rather than ignorance.
+		if gh.c.Comm == "" && (gh.c.NoPID == "gone" || gh.c.NoPID == "noproc") {
+			g.owners.Resolve(&gh.c)
+		}
+		// A ghost is promoted carrying the PID it had while alive, and the
+		// process that owned it very often dies during the window — that is
+		// usually *why* the socket died. So recheck on every tick, not just at
+		// promotion, and demote the number the moment it stops naming that
+		// process, rather than letting a corpse advertise a PID the kernel may
+		// already have handed to something else.
+		g.owners.Verify(&gh.c)
+		g.dead[id] = gh
 		out = append(out, gh.c)
 	}
 	// Remember this tick's live set for the next diff.

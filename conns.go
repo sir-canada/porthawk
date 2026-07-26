@@ -66,6 +66,15 @@ type Conn struct {
 	//            holds it and none ever will (see kernelUnowned)
 	//   "gone"   it exited between the /proc walk and this scan
 	NoPID string `json:"noPid,omitempty"`
+	// Inherit marks a row whose Comm/App/PID did not come from the kernel this
+	// tick but from LastOwners — the last process we saw holding this exact
+	// 4-tuple. The attribution is true of the socket's past, not its present,
+	// and the UI dims it to say so.
+	Inherit bool `json:"inherit,omitempty"`
+	// WasPID is the former owner's PID, set only when that process is no
+	// longer alive (or its number has been recycled). It is deliberately not
+	// PID: it exists to answer "what was this", not to be killed.
+	WasPID int `json:"wasPid,omitempty"`
 }
 
 // capsNeeded mirrors CAPS in the Makefile. Kept here so the runtime hint
@@ -97,6 +106,14 @@ type Scanner struct {
 	// unowned remembers, per socket inode, when we first saw a socket that
 	// has an inode but that no /proc/<pid>/fd points at. See kernelUnowned.
 	unowned map[uint64]time.Time
+	// everOwned remembers, per socket inode, that some process once held an
+	// fd on it. Once its owner exits, a socket that belonged to a program is
+	// byte-for-byte indistinguishable from one the kernel opened for itself,
+	// and the age test alone then calls both kernel-owned. That is wrong in
+	// the one direction that costs a name: the sockets it mislabels are
+	// exactly the long-lived corpses whose owner you most want reported.
+	// Both maps are pruned to the live inode set on every scan.
+	everOwned map[uint64]bool
 }
 
 // How long a socket must keep an inode that no process holds before we stop
@@ -122,6 +139,7 @@ func NewScanner() *Scanner {
 	return &Scanner{
 		inodePID:  make(map[uint64]int),
 		unowned:   make(map[uint64]time.Time),
+		everOwned: make(map[uint64]bool),
 		commCache: make(map[int]string),
 		appCache:  make(map[int]string),
 		userCache: make(map[uint32]string),
@@ -166,13 +184,14 @@ func (s *Scanner) Scan() []Conn {
 	defer s.mu.Unlock()
 
 	// Walk /proc if any inode is unknown, or periodically to evict stale.
-	// A socket already established as kernel-owned is not "unknown": it will
-	// never be in the map, and treating it as a reason to walk means a full
-	// /proc sweep on every single tick for as long as it exists.
+	// A socket that has been unowned for kernelUnowned is not "unknown": no
+	// walk is going to find it an owner, whether because it never had one or
+	// because the one it had is long gone. Treating it as a reason to walk
+	// means a full /proc sweep on every single tick for as long as it exists.
 	missing := false
 	for _, r := range raws {
 		if r.inode != 0 {
-			if _, ok := s.inodePID[r.inode]; !ok && !s.kernelOwned(r.inode, time.Now()) {
+			if _, ok := s.inodePID[r.inode]; !ok && !s.staleUnowned(r.inode, time.Now()) {
 				missing = true
 				break
 			}
@@ -192,10 +211,14 @@ func (s *Scanner) Scan() []Conn {
 		if r.inode == 0 {
 			continue
 		}
+		live[r.inode] = true
 		if _, owned := s.inodePID[r.inode]; owned {
+			// Attributable right now, so it is not kernel-internal and never
+			// will be. Clear any age it accrued during a walk race.
+			s.everOwned[r.inode] = true
+			delete(s.unowned, r.inode)
 			continue
 		}
-		live[r.inode] = true
 		if _, ok := s.unowned[r.inode]; !ok {
 			s.unowned[r.inode] = now
 		}
@@ -203,6 +226,11 @@ func (s *Scanner) Scan() []Conn {
 	for ino := range s.unowned {
 		if !live[ino] {
 			delete(s.unowned, ino)
+		}
+	}
+	for ino := range s.everOwned {
+		if !live[ino] {
+			delete(s.everOwned, ino)
 		}
 	}
 
@@ -261,11 +289,27 @@ func (s *Scanner) unownedReason(inode uint64, now time.Time) string {
 	return "gone"
 }
 
-// kernelOwned reports whether this inode has gone unowned for long enough
-// that no exiting process can explain it. Caller holds the lock.
-func (s *Scanner) kernelOwned(inode uint64, now time.Time) bool {
+// staleUnowned reports whether this inode has gone unowned for long enough
+// that another /proc walk will not turn up an owner. Caller holds the lock.
+func (s *Scanner) staleUnowned(inode uint64, now time.Time) bool {
 	first, ok := s.unowned[inode]
 	return ok && now.Sub(first) >= kernelUnowned
+}
+
+// kernelOwned reports whether this inode belongs to the kernel itself: nothing
+// holds it, and nothing ever did. Age alone is not enough to conclude that.
+// A socket whose owner exited keeps its inode for as long as the peer leaves
+// the connection up, which on a real link is minutes, not the seconds the age
+// test allows — so without the everOwned check every long-running download
+// whose process dies is filed as kernel-internal, and "kernel" is the one
+// reason that is never resolved from LastOwners, because a socket that never
+// had an owner cannot have a remembered one. The name is thrown away for
+// precisely the rows that have a name to show. Caller holds the lock.
+func (s *Scanner) kernelOwned(inode uint64, now time.Time) bool {
+	if s.everOwned[inode] {
+		return false
+	}
+	return s.staleUnowned(inode, now)
 }
 
 // walkProc rebuilds the socket-inode -> pid map. Needs
