@@ -227,6 +227,21 @@ match whatever names row ended up w/.
   `ifaceTTL` (10 s) so VPNs coming up and DHCP renewals land,
   failed enumeration keeps previous map rather than un-naming
   everything.
+- **One instance per config dir, enforced by `flock`.** Taken in
+  `main` before `listen()`, held for process lifetime via package
+  var `lockFile` (`os.File` finalizer closes fd = drops lock, so the
+  reference must outlive the function). Two copies sharing a config
+  dir fight over `port` file: newcomer finds saved port busy, picks
+  another, writes it back — published URL then names wrong process,
+  and a pre-upgrade stray keeps serving old build from own transient
+  unit where `systemctl restart` can't reach it. Don't replace w/
+  pidfile: flock is released by kernel even on SIGKILL.
+- **Optional deps report, they don't retry forever.** `nethogs`
+  missing = permanent, `exec.LookPath` first, say it once, stop
+  (was 3 s retry forever ≈ 29k journal lines/day). Real crashes
+  back off 3 s → 2 min, reset after a run that lasted > 30 s.
+  Reason goes to UI via `Hogs.Why()`/`hogsWhy`, same channel as
+  `UDPWhy`.
 - **`PID == -1` has three causes, don't collapse them.** `inode == 0`
   means kernel keeps no owner (TIME_WAIT — reported as uid 0, so row
   reads `root`; harmless). Inode set but unmapped means either we

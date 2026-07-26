@@ -52,6 +52,8 @@ install: build
 	systemctl --user restart porthawk
 	loginctl enable-linger "$$(id -un)" 2>/dev/null || true
 	@sleep 1
+	@echo "checking for copies the service does not manage:"
+	@$(MAKE) --no-print-directory strays
 	@echo "porthawk running as a user service. Open:"
 	@echo "  http://127.0.0.1:$$(cat $(HOME)/.config/porthawk/port 2>/dev/null)/?t=$$(cat $(HOME)/.config/porthawk/token 2>/dev/null)"
 
@@ -74,6 +76,32 @@ restart: install
 clean:
 	rm -f $(BIN)
 
+# A copy started outside the service — typed into a launcher, say — lands
+# in its own transient unit, so `systemctl --user restart porthawk` does
+# not stop it. It keeps serving, from a binary this install has already
+# replaced, and the browser tab pointed at it never sees the upgrade.
+# Newer builds refuse to start as a second copy, but one that is already
+# running predates that check, so look for it.
+strays:
+	@main=$$(systemctl --user show -p MainPID --value porthawk 2>/dev/null); \
+	found=0; \
+	for pid in $$(pgrep -x $(BIN) 2>/dev/null); do \
+	  [ "$$pid" = "$$main" ] && continue; \
+	  exe=$$(readlink /proc/$$pid/exe 2>/dev/null); \
+	  echo "  stray pid $$pid  ->  $${exe:-<unreadable>}"; \
+	  found=1; \
+	done; \
+	if [ $$found = 1 ]; then \
+	  echo ""; \
+	  echo "  These are not managed by the service and a restart will not stop them."; \
+	  echo "  A stray from before an upgrade keeps serving the OLD build."; \
+	  echo "  Stop them with:"; \
+	  echo "    systemctl --user stop 'app-$(BIN)@*.service'   # if launched from a desktop launcher"; \
+	  echo "    pkill -x $(BIN) && systemctl --user restart $(BIN)   # blunter"; \
+	else \
+	  echo "  none (only the service is running)"; \
+	fi
+
 # Diagnose an install that is running but not attributing sockets.
 doctor:
 	@echo "binary:   $(PREFIX)/bin/$(BIN)"
@@ -82,8 +110,11 @@ doctor:
 	@echo "service:  $$(systemctl --user is-active porthawk 2>&1)"
 	@echo "port:     $$(cat $(HOME)/.config/porthawk/port 2>/dev/null || echo '(not started yet)')"
 	@echo ""
+	@echo "unmanaged copies:"
+	@$(MAKE) --no-print-directory strays
+	@echo ""
 	@echo "attribution warnings in the log (if any):"
 	@journalctl --user -u porthawk -n 200 --no-pager 2>/dev/null \
 	  | grep -i attribution || echo "  (none)"
 
-.PHONY: build dev install uninstall bpf restart clean verify-caps doctor
+.PHONY: build dev install uninstall bpf restart clean verify-caps doctor strays

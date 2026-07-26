@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -50,11 +51,14 @@ type Snapshot struct {
 	// AttrBlocked counts processes that refused us /proc/<pid>/fd on the
 	// last walk. Non-zero means unattributed rows are a missing capability,
 	// not a mystery.
-	AttrBlocked int              `json:"attrBlocked"`
-	Caps        string           `json:"caps"` // capability list the fix needs
-	Totals      ProcStat         `json:"totals"`
-	Procs       map[int]ProcStat `json:"procs"`
-	Conns       []Conn           `json:"conns"`
+	AttrBlocked int    `json:"attrBlocked"`
+	Caps        string `json:"caps"` // capability list the fix needs
+	// HogsWhy explains missing per-process totals (nethogs absent or
+	// crashing), "" when they are live.
+	HogsWhy string           `json:"hogsWhy,omitempty"`
+	Totals  ProcStat         `json:"totals"`
+	Procs   map[int]ProcStat `json:"procs"`
+	Conns   []Conn           `json:"conns"`
 }
 
 type server struct {
@@ -94,6 +98,19 @@ func main() {
 	cfgDir = filepath.Join(cfgDir, "porthawk")
 	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
 		log.Fatal(err)
+	}
+
+	// Refuse to be a second copy before anything else happens. Two
+	// instances sharing a config dir fight over the port file: the newcomer
+	// finds the saved port occupied by the incumbent, picks another, and
+	// writes that back — so the "stable" URL drifts on every restart. The
+	// thing most likely to be holding porthawk's port is another porthawk.
+	if !singleInstance(cfgDir) {
+		log.Print("porthawk is already running; not starting a second copy")
+		if u := runningURL(cfgDir); u != "" {
+			log.Printf("open the running one at: %s", u)
+		}
+		return
 	}
 
 	prefs := loadPrefs(cfgDir)
@@ -163,6 +180,48 @@ func main() {
 	if err := srv.Serve(ln); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
+}
+
+// ---- single instance ----
+
+// lockFile is kept alive for the process lifetime on purpose: os.File has
+// a finalizer that closes the descriptor, and closing it drops the lock.
+var lockFile *os.File
+
+// singleInstance takes an exclusive advisory lock on the config dir. The
+// lock is per config dir, so two instances with different -listen and
+// different XDG_CONFIG_HOME still work; only copies that would tread on
+// each other's state are refused.
+//
+// flock is released by the kernel when the process dies, so a crash or a
+// SIGKILL cannot leave a stale lock behind — no PID file to go stale, no
+// "is that PID still ours?" guessing.
+func singleInstance(cfgDir string) bool {
+	f, err := os.OpenFile(filepath.Join(cfgDir, "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return true // cannot lock: a missing guard is better than no startup
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		return false
+	}
+	lockFile = f
+	return true
+}
+
+// runningURL reconstructs the incumbent's address from the shared config
+// dir, so the duplicate can point the user at the instance that already
+// exists instead of just refusing.
+func runningURL(cfgDir string) string {
+	port, err := os.ReadFile(filepath.Join(cfgDir, "port"))
+	if err != nil {
+		return ""
+	}
+	tok, err := os.ReadFile(filepath.Join(cfgDir, "token"))
+	if err != nil {
+		return ""
+	}
+	return "http://127.0.0.1:" + strings.TrimSpace(string(port)) + "/?t=" + strings.TrimSpace(string(tok))
 }
 
 // ---- listener ----
@@ -469,7 +528,8 @@ func (s *server) broadcastLoop(ctx context.Context) {
 			Priv:        s.privileged,
 			GhostTTL:    int(s.ghosts.TTL() / time.Second),
 			AttrBlocked: s.scanner.Blocked(), Caps: capsNeeded,
-			Procs: procs, Conns: conns,
+			HogsWhy: s.hogs.Why(),
+			Procs:   procs, Conns: conns,
 		}
 		buf, err := json.Marshal(snap)
 		if err != nil {

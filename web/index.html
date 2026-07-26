@@ -458,6 +458,7 @@ tr:hover .kbtn{opacity:.7}
       drop the highlight
     </div>
     <div class="hint" id="attrHint" hidden></div>
+    <div class="hint" id="hogsHint" hidden></div>
     <div class="hint" id="udpHint" hidden></div>
   </section>
   <section data-tab="about">
@@ -1119,6 +1120,14 @@ function drawPanel(){
       'but that is normal: the kernel keeps no owning process for them.';
     ah.appendChild(p); ah.appendChild(pre); ah.appendChild(p2);
   }
+
+  // Per-process totals come from nethogs, which is optional. Shown only
+  // when it is missing or failing, for the same reason as above.
+  const hh=$('#hogsHint');
+  hh.hidden=!snap||!snap.hogsWhy;
+  if(snap&&snap.hogsWhy)
+    hh.textContent='Per-process traffic totals: '+snap.hogsWhy+
+      ' Per-connection numbers are unaffected — they come from the kernel directly.';
 
   const uh=$('#udpHint');
   uh.hidden=!snap;

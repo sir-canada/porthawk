@@ -103,6 +103,24 @@ per-process total — hover any group's KB/s cell for a breakdown of how
 much is attributed to connections and how much is not. Nothing silently
 under-reports; it just gets vaguer.
 
+### One instance at a time
+
+porthawk takes an exclusive lock on its config dir at startup. A second
+copy — typed into a launcher, say — prints where the running one is and
+exits instead of starting alongside it.
+
+This matters more than it sounds. Both copies share one config dir, so the
+newcomer would find the saved port busy, pick another, and write *that*
+back: the port file is the documented way to find the UI, so it would now
+name the ad-hoc copy rather than the service. Worse, a stray launched
+before an upgrade keeps serving the old build from its own transient
+systemd unit, where `systemctl --user restart porthawk` cannot reach it —
+so the browser tab never sees the new version.
+
+The lock is `flock`, released by the kernel on exit including `SIGKILL`,
+so there is no stale lock to clean up. `make install` also reports any
+copy the service does not manage, and `make strays` lists them on demand.
+
 ### Rows with no process (`—`, no PID, user `root`)
 
 Two different things look identical here, so porthawk labels them — hover
