@@ -312,8 +312,12 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
+			// Persistent, not a session cookie: the token file outlives
+			// browser restarts, so an open tab should too. 400 days is
+			// Chromium's cap on cookie lifetime.
 			http.SetCookie(w, &http.Cookie{
 				Name: "porthawk", Value: t, Path: "/",
+				MaxAge:   400 * 24 * 60 * 60,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode,
 			})
 			http.Redirect(w, r, r.URL.Path, http.StatusSeeOther)
