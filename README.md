@@ -21,7 +21,7 @@ five-digit one, chosen once on first run and kept in
 `~/.config/porthawk/port`, so the URL stays stable across restarts; a new
 one is picked only if that port has been taken by something else. Pin it
 with `-listen 127.0.0.1:7413` if you want a fixed address. Token is stored
-in `~/.config/porthawk/token` (0600); after first visit a cookie is set.
+in `~/.config/porthawk/token` (0600); after first visit a cookie is set, and the tokened URL stays in the address bar so a refresh keeps working even if the cookie is cleared.
 
 Permanent install — runs as a per-user systemd service (no root at
 runtime; one `sudo` for `setcap` only):
@@ -56,6 +56,15 @@ caps do not. See `porthawk.service` header and git history.
 - Binds 127.0.0.1 only. All routes need the random 256-bit token
   (cookie). WebSocket enforces same-origin — a malicious web page you
   visit cannot connect.
+- Optional `-no-token`: a clean `http://127.0.0.1:<port>/` with no token
+  or cookie. Instead, each request must name this listener in `Host`
+  (stops DNS rebinding), carry `Sec-Fetch-Site: none` or `same-origin`
+  (stops other sites, including other localhost ports), and have a
+  matching `Origin` if it sends one. Programs that aren't browsers send
+  none of these headers and get in, so any local program can read the
+  UI. Off by default. To enable it for the service, add a drop-in
+  `~/.config/systemd/user/porthawk.service.d/no-token.conf` containing
+  `[Service]`, `ExecStart=` and `ExecStart=%h/.local/bin/porthawk -no-token`.
 - Kill endpoint: kernel refuses cross-user signals (no `CAP_KILL`) and
   the server independently 403s any PID not owned by your UID.
 - **Privileged actions re-authenticate at the desktop.** Blocking an
