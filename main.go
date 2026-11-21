@@ -304,9 +304,12 @@ func (s *server) tokenOK(v string) bool {
 		subtle.ConstantTimeCompare([]byte(v), []byte(s.token)) == 1
 }
 
-// auth accepts ?t=<token> (sets cookie, redirects clean) or the cookie.
+// auth accepts ?t=<token> (sets cookie, serves the page) or the cookie.
 func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// The token may sit in the address bar, so never let it leak
+		// out in a Referer header.
+		w.Header().Set("Referrer-Policy", "no-referrer")
 		if t := r.URL.Query().Get("t"); t != "" {
 			if !s.tokenOK(t) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -320,7 +323,10 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 				MaxAge:   400 * 24 * 60 * 60,
 				HttpOnly: true, SameSite: http.SameSiteStrictMode,
 			})
-			http.Redirect(w, r, r.URL.Path, http.StatusSeeOther)
+			// No redirect to the bare URL: leaving ?t= in the address bar
+			// means a refresh still works after the browser loses the
+			// cookie (cleared site data, privacy wipes, a new profile).
+			next(w, r)
 			return
 		}
 		if c, err := r.Cookie("porthawk"); err == nil && s.tokenOK(c.Value) {

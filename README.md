@@ -21,7 +21,7 @@ five-digit one, chosen once on first run and kept in
 `~/.config/porthawk/port`, so the URL stays stable across restarts; a new
 one is picked only if that port has been taken by something else. Pin it
 with `-listen 127.0.0.1:7413` if you want a fixed address. Token is stored
-in `~/.config/porthawk/token` (0600); after first visit a cookie is set.
+in `~/.config/porthawk/token` (0600); after first visit a cookie is set, and the tokened URL stays in the address bar so a refresh keeps working even if the cookie is cleared.
 
 Permanent install — runs as a per-user systemd service (no root at
 runtime; one `sudo` for `setcap` only):
