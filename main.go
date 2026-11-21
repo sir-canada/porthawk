@@ -74,6 +74,10 @@ type server struct {
 	udp        *UDPStats
 	ghosts     *Ghosts
 	privileged bool
+	// noToken: skip the token and trust requests made by a browser
+	// pointed straight at this loopback address (see localOK).
+	noToken bool
+	hosts   map[string]bool // Host headers that name this listener
 
 	mu      sync.Mutex
 	clients map[*websocket.Conn]context.CancelFunc
@@ -88,6 +92,8 @@ func main() {
 	// on polkit to refuse.
 	privileged := flag.Bool("privileged", true,
 		"offer actions that authenticate via polkit (ufw block, kill another user's process)")
+	noToken := flag.Bool("no-token", false,
+		"no login token: any local program can read the UI; web pages from other sites are still refused")
 	flag.Parse()
 	log.SetFlags(log.Ltime)
 
@@ -167,6 +173,13 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	if *noToken {
+		port := strconv.Itoa(ln.Addr().(*net.TCPAddr).Port)
+		s.noToken = true
+		s.hosts = map[string]bool{
+			"127.0.0.1:" + port: true, "localhost:" + port: true, "[::1]:" + port: true,
+		}
+	}
 
 	srv := &http.Server{Handler: mux}
 	go func() {
@@ -176,7 +189,11 @@ func main() {
 		srv.Shutdown(sctx)
 	}()
 
-	log.Printf("porthawk ready:  http://%s/?t=%s", ln.Addr(), s.token)
+	if s.noToken {
+		log.Printf("porthawk ready:  http://%s/  (no token: -no-token)", ln.Addr())
+	} else {
+		log.Printf("porthawk ready:  http://%s/?t=%s", ln.Addr(), s.token)
+	}
 	if err := srv.Serve(ln); err != http.ErrServerClosed {
 		log.Fatal(err)
 	}
@@ -310,6 +327,14 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 		// The token may sit in the address bar, so never let it leak
 		// out in a Referer header.
 		w.Header().Set("Referrer-Policy", "no-referrer")
+		if s.noToken {
+			if !s.localOK(r) {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+			next(w, r)
+			return
+		}
 		if t := r.URL.Query().Get("t"); t != "" {
 			if !s.tokenOK(t) {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
@@ -335,6 +360,34 @@ func (s *server) auth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		http.Error(w, "unauthorized — open the URL printed at startup", http.StatusUnauthorized)
 	}
+}
+
+// localOK is the -no-token gate. Binding to loopback keeps other machines
+// out, but every web page open in the browser can also send requests to
+// 127.0.0.1, so those are what this refuses:
+//   - Host must name this listener by its loopback address. A DNS-rebinding
+//     page (evil.example resolving to 127.0.0.1) arrives with its own name.
+//   - Sec-Fetch-Site must be "none" (typed URL, bookmark, refresh) or
+//     "same-origin" (porthawk's own page). Other sites, including other
+//     ports on localhost, are "cross-site"/"same-site" and get refused.
+//   - Origin, when sent, must be this listener (covers older browsers that
+//     send Origin but not Sec-Fetch-Site on POSTs).
+//
+// Programs that are not browsers send none of these headers and get in:
+// that is the trade -no-token makes.
+func (s *server) localOK(r *http.Request) bool {
+	if !s.hosts[r.Host] {
+		return false
+	}
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "", "none", "same-origin":
+	default:
+		return false
+	}
+	if o := r.Header.Get("Origin"); o != "" && o != "http://"+r.Host {
+		return false
+	}
+	return true
 }
 
 // ---- handlers ----
